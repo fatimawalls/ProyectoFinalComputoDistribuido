@@ -1,6 +1,6 @@
 # ProyectoFinalComputoDistribuido
 
-## Explanation Option A
+## Option A
 
 Currently, **PimentelCompany IS de GC** is a very successful company, very inspired by its recent achievements. Right now, the company requires a **ChatRoom** for their businesses. The owners know that various solutions exist in the market, but not all offer particular solutions. In addition, some public chats like WhatsApp or Instagram are a distraction for their employees.  
 

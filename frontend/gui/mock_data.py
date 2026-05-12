@@ -4,22 +4,40 @@
 # --- DATOS SIMULADOS ---
 
 MOCK_USERS = [
-    {"username": "jperez_root",  "nickname": "jperez.sys",   "online": True},
-    {"username": "maria_p",      "nickname": "Maria_P",       "online": True},
-    {"username": "admin_root",   "nickname": "Admin_Root",    "online": True},
-    {"username": "juan_dev",     "nickname": "Juan_Dev",      "online": False},
-    {"username": "ana_ops",      "nickname": "Ana_Ops",       "online": True},
+    {"username": "jperez_root", "nickname": "jperez.sys",  "online": True},
+    {"username": "maria_p",     "nickname": "Maria_P",     "online": True},
+    {"username": "admin_root",  "nickname": "Admin_Root",  "online": True},
+    {"username": "juan_dev",    "nickname": "Juan_Dev",    "online": False},
+    {"username": "ana_ops",     "nickname": "Ana_Ops",     "online": True},
 ]
 
 MOCK_ROOMS = [
-    {"id": "general",    "name": "general",    "coordinator": "admin_root", "members": ["admin_root", "maria_p", "juan_dev"], "notifications": 0},
-    {"id": "root-access","name": "root-access","coordinator": "jperez_root","members": ["jperez_root", "ana_ops"],             "notifications": 1},
-    {"id": "dev-ops",    "name": "dev-ops",    "coordinator": "maria_p",   "members": ["maria_p", "juan_dev", "ana_ops"],     "notifications": 3},
+    {
+        "id":            "general",
+        "name":          "general",
+        "coordinator":   "admin_root",
+        "members":       ["admin_root", "maria_p", "juan_dev"],
+        "notifications": 0,
+    },
+    {
+        "id":            "root-access",
+        "name":          "root-access",
+        "coordinator":   "jperez_root",
+        "members":       ["jperez_root", "ana_ops", "maria_p"],
+        "notifications": 1,
+    },
+    {
+        "id":            "dev-ops",
+        "name":          "dev-ops",
+        "coordinator":   "maria_p",
+        "members":       ["maria_p", "juan_dev", "ana_ops"],
+        "notifications": 3,
+    },
 ]
 
 MOCK_MESSAGES = {
     "general":     [("Admin_Root", "Welcome to the general channel."), ("Maria_P", "Thanks!")],
-    "root-access": [("Ana_Ops", "Server is up."), ("jperez.sys", "Copy that.")],
+    "root-access": [("Ana_Ops", "Server is up."), ("jperez.sys", "Copy that."), ("Maria_P", "Meeting in 5.")],
     "dev-ops":     [("Maria_P", "Deploy finished."), ("Juan_Dev", "Any errors?"), ("Ana_Ops", "All clear.")],
 }
 
@@ -29,7 +47,6 @@ MOCK_JOIN_REQUESTS = {
     ],
     "dev-ops": [
         {"username": "admin_root", "nickname": "Admin_Root"},
-        {"username": "new_user",   "nickname": "New_User"},
     ],
 }
 
@@ -43,16 +60,43 @@ class MockServer:
         self.current_nick = current_nick
 
         # Copias locales para poder modificar en runtime
-        self.users   = list(MOCK_USERS)
-        self.rooms   = list(MOCK_ROOMS)
-        self.messages   = {k: list(v) for k, v in MOCK_MESSAGES.items()}
-        self.requests   = {k: list(v) for k, v in MOCK_JOIN_REQUESTS.items()}
+        self.users    = list(MOCK_USERS)
+        self.rooms    = list(MOCK_ROOMS)
+        self.messages = {k: list(v) for k, v in MOCK_MESSAGES.items()}
+        self.requests = {k: list(v) for k, v in MOCK_JOIN_REQUESTS.items()}
 
     # --- USUARIOS ---
 
+    def get_user(self, username):
+        for u in self.users:
+            if u["username"] == username:
+                return u
+        return None
+
     def get_online_users(self):
+        # Solo usuarios online, excluyendo al usuario actual
         # AQUÍ IRÍA: network_client.request("LOBBY_LIST_USERS")
-        return [u for u in self.users if u["online"] and u["username"] != self.current_user]
+        return [u for u in self.users
+                if u["online"] and u["username"] != self.current_user]
+
+    def get_all_users(self):
+        # Todos los usuarios del sistema, excluyendo al usuario actual
+        # AQUÍ IRÍA: network_client.request("LOBBY_LIST_ALL_USERS")
+        return [u for u in self.users if u["username"] != self.current_user]
+
+    def get_member_nicknames(self, room_id):
+        # Retorna los nicknames de los miembros de una sala para simular mensajes
+        room = self.get_room(room_id)
+        if not room:
+            return []
+        nicknames = []
+        for username in room["members"]:
+            if username == self.current_user:
+                continue
+            user = self.get_user(username)
+            if user:
+                nicknames.append(user["nickname"])
+        return nicknames
 
     # --- CHATROOMS ---
 
@@ -75,17 +119,17 @@ class MockServer:
 
     def create_room(self, room_name):
         # AQUÍ IRÍA: network_client.send("COORD_CREATE_ROOM", room_name)
-        room_id = room_name.lower().replace(" ", "-")
+        room_id  = room_name.lower().replace(" ", "-")
         new_room = {
-            "id":          room_id,
-            "name":        room_name,
-            "coordinator": self.current_user,
-            "members":     [self.current_user],
+            "id":            room_id,
+            "name":          room_name,
+            "coordinator":   self.current_user,
+            "members":       [self.current_user],
             "notifications": 0,
         }
         self.rooms.append(new_room)
-        self.messages[room_id]  = []
-        self.requests[room_id]  = []
+        self.messages[room_id] = []
+        self.requests[room_id] = []
         return new_room
 
     def request_join(self, room_id):
@@ -120,11 +164,13 @@ class MockServer:
         room = self.get_room(room_id)
         if room and username not in room["members"]:
             room["members"].append(username)
-        self.requests[room_id] = [r for r in self.requests.get(room_id, []) if r["username"] != username]
+        self.requests[room_id] = [r for r in self.requests.get(room_id, [])
+                                  if r["username"] != username]
 
     def reject_request(self, room_id, username):
         # AQUÍ IRÍA: network_client.send("COORD_REJECT_USER", room_id, username)
-        self.requests[room_id] = [r for r in self.requests.get(room_id, []) if r["username"] != username]
+        self.requests[room_id] = [r for r in self.requests.get(room_id, [])
+                                  if r["username"] != username]
 
     def kick_user(self, room_id, username):
         # AQUÍ IRÍA: network_client.send("COORD_KICK_USER", room_id, username)

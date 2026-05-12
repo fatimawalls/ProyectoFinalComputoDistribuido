@@ -12,7 +12,7 @@ class AppController:
         # Cliente de red compartido en toda la app
         self.network = NetworkClient()
 
-        # Datos del usuario autenticado
+        # Datos del usuario autenticado (se llenan al hacer login o registro)
         self.current_user = None
         self.current_nick = None
 
@@ -35,12 +35,15 @@ class AppController:
         )
 
     def show_lobby(self):
-        # Crear ventana principal del E-Lobby y arrancar su mainloop
+        # Crear ventana principal del E-Lobby con los datos reales del usuario
         root = tk.Tk()
-        app = ChatClientGUI(root)
+        ChatClientGUI(
+            root,
+            username=self.current_user,
+            nickname=self.current_nick or self.current_user
+        )
 
-        # AQUÍ se inyectarían los datos del usuario real al lobby
-        # app.set_user(self.current_user, self.current_nick)
+        # AQUÍ se inyectaría el cliente de red cuando el backend esté listo
         # app.set_network(self.network)
 
         root.mainloop()
@@ -48,8 +51,11 @@ class AppController:
     # --- CALLBACKS DE AUTENTICACIÓN ---
 
     def handle_login(self, user, pwd):
-        # Login exitoso: guardar sesión y abrir el E-Lobby
+        # Login exitoso: guardar usuario y abrir E-Lobby
         self.current_user = user
+        # Si no tiene nick guardado del registro, usar el username como nick
+        if not self.current_nick:
+            self.current_nick = user
 
         # AQUÍ IRÍA LA VERIFICACIÓN REAL CON EL BACKEND C
         # self.network.connect("127.0.0.1", 8080)

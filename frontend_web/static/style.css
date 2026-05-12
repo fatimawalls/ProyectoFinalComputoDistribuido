@@ -1,0 +1,65 @@
+:root {
+    --bg-dark: #0D0D0D; --bg-main: #141414; --bg-secondary: #1E1E1E;
+    --text-main: #E0E0E0; --text-muted: #6B6B6B;
+    --accent: #2232E3; --accent-hover: #3A4BFF; --error: #E32222; --success: #22E37A;
+    --font-ui: "Segoe UI", sans-serif; --font-code: "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background-color: var(--bg-main); color: var(--text-main); font-family: var(--font-ui); height: 100vh; overflow: hidden; }
+
+.view { display: none; height: 100%; width: 100%; }
+.view.active { display: flex; }
+.screen { display: none; flex: 1; flex-direction: column; padding: 30px; }
+.screen.active { display: flex; }
+
+/* Auth Boxes */
+#login-view, #register-view { align-items: center; justify-content: center; }
+.auth-box { background-color: var(--bg-main); width: 460px; padding: 50px; }
+.auth-box h2 { font-size: 24px; }
+.subtitle { font-family: var(--font-code); color: var(--text-muted); font-size: 14px; margin-top: 5px; }
+.divider { height: 2px; background-color: var(--accent); margin: 20px 0; }
+
+/* Inputs y Botones */
+.input-group label { display: block; color: var(--accent); font-weight: bold; font-size: 12px; margin-bottom: 5px; }
+.input-border { background-color: var(--bg-secondary); padding: 2px; margin-bottom: 25px; transition: background 0.3s; }
+.input-border:focus-within { background-color: var(--accent); }
+.input-border input { width: 100%; padding: 12px; background-color: var(--bg-secondary); border: none; color: var(--text-main); font-family: var(--font-code); outline: none; }
+.error-msg { color: var(--error); font-size: 12px; margin-top: -15px; margin-bottom: 15px; height: 15px; }
+
+.btn-primary { width: 100%; padding: 12px; background-color: var(--accent); color: white; border: none; font-weight: bold; cursor: pointer; }
+.btn-primary:hover { background-color: var(--accent-hover); }
+.btn-text { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 10px; font-family: var(--font-ui); }
+
+/* Layout App */
+.sidebar { width: 260px; background-color: var(--bg-dark); display: flex; flex-direction: column; }
+.sidebar-header { padding: 30px 25px 0; }
+.sidebar-section { padding: 15px 25px; }
+.section-title { color: var(--text-muted); font-weight: bold; font-size: 12px; }
+.sidebar ul { list-style: none; font-family: var(--font-code); }
+.sidebar li { padding: 8px 0; cursor: pointer; color: var(--text-main); }
+.sidebar li:hover { color: var(--accent-hover); }
+.user-panel { margin-top: auto; background-color: var(--bg-secondary); padding: 20px; font-weight: bold; cursor: pointer; }
+.status-dot { color: var(--success); margin-right: 10px; }
+.main-panel { flex: 1; display: flex; flex-direction: column; position: relative; }
+
+/* Chat */
+.accent-text { color: var(--accent); margin-bottom: 10px; }
+.chat-header h2 { font-size: 24px; border-bottom: 1px solid var(--bg-secondary); padding-bottom: 20px; }
+.chat-history { flex: 1; overflow-y: auto; font-family: var(--font-code); padding: 20px 0; }
+.msg { margin-bottom: 10px; }
+.msg-sender { color: var(--text-muted); font-weight: bold; }
+.sys-msg { color: var(--accent); font-style: italic; margin-bottom: 10px; }
+.chat-input-area { display: flex; gap: 15px; margin-top: 10px; }
+.chat-input-area .input-border { flex: 1; margin-bottom: 0; }
+
+/* Modales */
+.modal-bg { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 100; }
+.modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 380px; background: var(--bg-main); z-index: 101; }
+.modal-top { height: 3px; background: var(--accent); width: 100%; }
+.modal-body { padding: 30px; }
+
+/* Lista Coordinator */
+.coord-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: var(--bg-secondary); margin-bottom: 5px; }
+
+/* Toasts */
+.toast { background: var(--bg-secondary); width: 300px; border-top: 3px solid var(--accent); padding: 12px; margin-top: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.5); font-family: var(--font-ui); font-size: 14px; }

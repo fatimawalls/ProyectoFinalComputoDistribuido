@@ -9,7 +9,7 @@
 </head>
 <body>
 
-    <!-- ═══════════════════════════════════ LOGIN ═══════════════════════════════════ -->
+    <!-- ══════════════════════ LOGIN ══════════════════════ -->
     <div id="login-view" class="view active">
         <div class="auth-box">
             <h2>PIMENTEL CO.</h2>
@@ -17,28 +17,21 @@
             <div class="divider"></div>
             <div class="input-group">
                 <label>USERNAME</label>
-                <div class="input-border" id="log-user-border">
-                    <input type="text" id="log-user" autocomplete="off">
-                </div>
+                <div class="input-border"><input type="text" id="log-user" autocomplete="off"></div>
             </div>
             <div class="input-group">
                 <label>PASSWORD</label>
-                <div class="input-border" id="log-pass-border">
-                    <input type="password" id="log-pass">
-                </div>
+                <div class="input-border"><input type="password" id="log-pass"></div>
             </div>
             <p id="log-error" class="error-msg"></p>
             <button id="btn-login" class="btn-primary">CONNECT &rarr;</button>
             <div class="divider"></div>
-            <p class="link-row">
-                No account?
-                <span class="accent-link" onclick="switchView('register-view')">REQUEST ACCESS</span>
-            </p>
+            <p class="link-row">No account? <span class="accent-link" onclick="switchView('register-view')">REQUEST ACCESS</span></p>
             <p class="footer-text">v0.1.0 // DISTRIBUTED SYSTEM</p>
         </div>
     </div>
 
-    <!-- ══════════════════════════════════ REGISTER ══════════════════════════════════ -->
+    <!-- ══════════════════════ REGISTER ══════════════════════ -->
     <div id="register-view" class="view">
         <div class="auth-box">
             <h2>NEW OPERATOR</h2>
@@ -46,40 +39,29 @@
             <div class="divider"></div>
             <div class="input-group">
                 <label>USERNAME</label>
-                <div class="input-border">
-                    <input type="text" id="reg-user" autocomplete="off">
-                </div>
+                <div class="input-border"><input type="text" id="reg-user" autocomplete="off"></div>
             </div>
             <div class="input-group">
                 <label>DISPLAY NAME</label>
-                <div class="input-border">
-                    <input type="text" id="reg-nick" autocomplete="off">
-                </div>
+                <div class="input-border"><input type="text" id="reg-nick" autocomplete="off"></div>
             </div>
             <div class="input-group">
                 <label>PASSWORD</label>
-                <div class="input-border">
-                    <input type="password" id="reg-pass">
-                </div>
+                <div class="input-border"><input type="password" id="reg-pass"></div>
             </div>
             <div class="input-group">
                 <label>CONFIRM PASSWORD</label>
-                <div class="input-border">
-                    <input type="password" id="reg-confirm">
-                </div>
+                <div class="input-border"><input type="password" id="reg-confirm"></div>
             </div>
             <p id="reg-error" class="error-msg"></p>
             <button id="btn-register" class="btn-primary">CREATE ACCOUNT &rarr;</button>
             <div class="divider"></div>
-            <p class="link-row">
-                Already registered?
-                <span class="accent-link" onclick="switchView('login-view')">SIGN IN</span>
-            </p>
+            <p class="link-row">Already registered? <span class="accent-link" onclick="switchView('login-view')">SIGN IN</span></p>
             <p class="footer-text">v0.1.0 // DISTRIBUTED SYSTEM</p>
         </div>
     </div>
 
-    <!-- ═══════════════════════════════════ APP ════════════════════════════════════ -->
+    <!-- ══════════════════════ APP ══════════════════════ -->
     <div id="app-view" class="view">
 
         <!-- SIDEBAR -->
@@ -98,14 +80,14 @@
                 <ul id="channel-list"></ul>
             </div>
 
-            <!-- Online users -->
+            <!-- Users (todos — online y offline) -->
             <div class="sidebar-section">
-                <div class="section-title">ONLINE</div>
-                <ul id="online-list"></ul>
+                <div class="section-title" style="margin-bottom:10px;">USERS</div>
+                <ul id="users-list"></ul>
             </div>
 
-            <!-- Profile panel -->
-            <div class="user-panel" id="user-panel" onclick="openModal('modal-profile')">
+            <!-- Profile -->
+            <div class="user-panel" id="user-panel">
                 <span class="status-dot online-dot">●</span>
                 <span id="current-user-nick">—</span>
             </div>
@@ -114,7 +96,7 @@
         <!-- MAIN PANEL -->
         <div class="main-panel">
 
-            <!-- Welcome screen -->
+            <!-- Welcome -->
             <div id="welcome-screen" class="screen active">
                 <div class="center-content">
                     <p class="accent-text" style="font-weight:bold; margin-bottom:8px;">SECURE CONNECTION ESTABLISHED</p>
@@ -123,18 +105,16 @@
                 </div>
             </div>
 
-            <!-- Private room screen -->
+            <!-- Private room -->
             <div id="private-room-screen" class="screen">
                 <div class="center-content">
                     <h2 id="private-title" style="margin-bottom:8px;"></h2>
                     <p class="muted-text">This channel is private.</p>
                     <div class="divider" style="width:300px; margin:25px auto;"></div>
-                    <!-- Estado: no solicitado -->
                     <div id="private-not-requested">
                         <p class="muted-text" style="margin-bottom:20px;">You need coordinator approval to join this channel.</p>
                         <button class="btn-primary" style="width:220px;" onclick="requestJoinRoom()">REQUEST ACCESS &rarr;</button>
                     </div>
-                    <!-- Estado: solicitud pendiente -->
                     <div id="private-pending" style="display:none;">
                         <p class="warning-text" style="font-weight:bold; margin-bottom:8px;">REQUEST PENDING</p>
                         <p class="muted-text">Waiting for the coordinator to accept your request.</p>
@@ -142,21 +122,22 @@
                 </div>
             </div>
 
-            <!-- Chat screen -->
+            <!-- Chat -->
             <div id="chat-screen" class="screen">
                 <div class="chat-header">
                     <h2 id="chat-title"></h2>
                     <div class="chat-header-right">
                         <span id="role-indicator" class="role-badge"></span>
-                        <button id="btn-manage" class="btn-text accent-text" style="display:none;" onclick="openCoordPanel()">⚙ Manage Room</button>
-                        <button id="btn-leave" class="btn-text error-text" style="display:none;" onclick="leaveRoom()">← Leave Room</button>
+                        <button id="btn-members" class="btn-text muted-text" style="display:none;" onclick="openMembersPanel()">Members</button>
+                        <button id="btn-manage"  class="btn-text accent-text" style="display:none; font-weight:bold;" onclick="openCoordPanel()">⚙ Manage Room</button>
+                        <button id="btn-leave"   class="btn-text error-text"  style="display:none; font-weight:bold;" onclick="leaveRoom()">← Leave Room</button>
                     </div>
                 </div>
                 <div class="chat-divider"></div>
                 <div class="chat-history" id="chat-history"></div>
                 <div class="chat-input-area">
                     <div class="input-border" style="flex:1; margin-bottom:0;">
-                        <input type="text" id="chat-input" autocomplete="off" placeholder="">
+                        <input type="text" id="chat-input" autocomplete="off">
                     </div>
                     <button id="btn-send" class="btn-send">SEND</button>
                 </div>
@@ -165,19 +146,17 @@
         </div>
     </div>
 
-    <!-- ═══════════════════════════════ MODAL BG ════════════════════════════════ -->
+    <!-- ══════════════════════ MODAL BG ══════════════════════ -->
     <div id="modal-bg" class="modal-bg" onclick="handleModalBgClick(event)"></div>
 
-    <!-- ════════════════════════════ MODAL: CREATE ROOM ═══════════════════════════ -->
+    <!-- ══════════════════════ MODAL: CREATE ROOM ══════════════════════ -->
     <div id="modal-create-room" class="modal">
         <div class="modal-top"></div>
         <div class="modal-body">
             <h2 style="margin-bottom:15px;">CREATE ROOM</h2>
             <div class="input-group">
                 <label>ROOM NAME</label>
-                <div class="input-border">
-                    <input type="text" id="new-room-name" autocomplete="off">
-                </div>
+                <div class="input-border"><input type="text" id="new-room-name" autocomplete="off"></div>
             </div>
             <p id="create-room-error" class="error-msg"></p>
             <button class="btn-primary" onclick="createRoom()">CREATE &rarr;</button>
@@ -185,7 +164,7 @@
         </div>
     </div>
 
-    <!-- ══════════════════════════════ MODAL: PROFILE ════════════════════════════ -->
+    <!-- ══════════════════════ MODAL: PROFILE ══════════════════════ -->
     <div id="modal-profile" class="modal">
         <div class="modal-top"></div>
         <div class="modal-body" style="text-align:center;">
@@ -195,38 +174,45 @@
             <div class="divider"></div>
             <div class="input-group" style="text-align:left; margin-top:15px;">
                 <label>EDIT DISPLAY NAME</label>
-                <div class="input-border">
-                    <input type="text" id="edit-nick">
-                </div>
+                <div class="input-border"><input type="text" id="edit-nick"></div>
             </div>
             <button class="btn-primary" onclick="updateProfile()">SAVE CHANGES</button>
             <button class="btn-text muted-text" style="width:100%; margin-top:10px;" onclick="closeModals()">CANCEL</button>
         </div>
     </div>
 
-    <!-- ══════════════════════════ MODAL: COORDINATOR ════════════════════════════ -->
+    <!-- ══════════════════════ MODAL: MEMBERS ══════════════════════ -->
+    <div id="modal-members" class="modal">
+        <div class="modal-top"></div>
+        <div class="modal-body">
+            <h2 id="members-title" style="margin-bottom:4px;"></h2>
+            <p id="members-count" class="muted-text code-text" style="margin-bottom:15px;"></p>
+            <div class="divider"></div>
+            <div id="members-list" style="margin-top:10px;"></div>
+            <div class="divider" style="margin-top:15px;"></div>
+            <button class="btn-text muted-text" style="width:100%; margin-top:10px;" onclick="closeModals()">CLOSE</button>
+        </div>
+    </div>
+
+    <!-- ══════════════════════ MODAL: COORDINATOR ══════════════════════ -->
     <div id="modal-coord" class="modal" style="width:440px;">
         <div class="modal-top"></div>
         <div class="modal-body">
             <h2 id="coord-title" style="margin-bottom:4px;"></h2>
             <p class="muted-text code-text" style="margin-bottom:15px;">Coordinator Panel</p>
             <div class="divider"></div>
-
             <p class="coord-section-label">PENDING REQUESTS</p>
             <div id="coord-requests"></div>
-
             <div class="divider"></div>
-
             <p class="coord-section-label">ALL USERS</p>
             <div id="coord-users"></div>
-
             <div class="divider"></div>
             <button class="btn-text error-text" style="font-weight:bold; padding:0;" onclick="deleteRoom()">⚠ DELETE ROOM</button>
             <button class="btn-text muted-text" style="width:100%; margin-top:10px;" onclick="closeModals()">CLOSE</button>
         </div>
     </div>
 
-    <!-- ═══════════════════════ MODAL: CUSTOM CONFIRM ════════════════════════════ -->
+    <!-- ══════════════════════ MODAL: CONFIRM ══════════════════════ -->
     <div id="modal-confirm" class="modal">
         <div class="modal-top"></div>
         <div class="modal-body">
@@ -239,7 +225,7 @@
         </div>
     </div>
 
-    <!-- ══════════════════════════ MODAL: CUSTOM INFO ════════════════════════════ -->
+    <!-- ══════════════════════ MODAL: INFO ══════════════════════ -->
     <div id="modal-info" class="modal">
         <div class="modal-top" id="info-top"></div>
         <div class="modal-body">
@@ -251,7 +237,7 @@
         </div>
     </div>
 
-    <!-- ══════════════════════════════ TOAST CONTAINER ════════════════════════════ -->
+    <!-- ══════════════════════ TOASTS ══════════════════════ -->
     <div id="toast-container"></div>
 
     <script src="{{ url_for('static', filename='main.js') }}"></script>

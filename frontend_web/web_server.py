@@ -6,7 +6,6 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config['SECRET_KEY'] = 'pimentel_secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Diccionario para guardar una instancia de MockServer por cada conexión web
 client_sessions = {}
 
 
@@ -46,18 +45,15 @@ def handle_register(data):
     emit('register_success', {'nickname': data.get('nickname', '')})
 
 
-# --- E-LOBBY Y SALAS ---
+# --- E-LOBBY ---
 
 def send_lobby_update(sid):
     mock = client_sessions.get(sid)
     if mock:
-        rooms     = mock.get_rooms()
-        users     = mock.get_online_users()
-        all_users = mock.get_all_users()
         emit('lobby_update', {
-            'rooms':     rooms,
-            'users':     users,
-            'all_users': all_users
+            'rooms':     mock.get_rooms(),
+            'users':     mock.get_all_users(),   # Todos (online y offline)
+            'all_users': mock.get_all_users()
         }, to=sid)
 
 
@@ -133,21 +129,40 @@ def handle_message(data):
         if text:
             # AQUÍ IRÍA: network_client.send("CHAT_SEND_MSG", room_id, text)
             mock.send_message(room_id, text)
-            emit('new_message', {
-                'room_id': room_id,
-                'sender':  mock.current_nick,
-                'text':    text
-            })
+            emit('new_message', {'room_id': room_id, 'sender': mock.current_nick, 'text': text})
+
+
+# --- MEMBERS DATA (para panel de miembros de usuarios no coordinadores) ---
+
+@socketio.on('get_members_data')
+def handle_get_members_data(data):
+    mock = client_sessions.get(request.sid)
+    if mock:
+        room_id = data.get('room_id')
+        room    = mock.get_room(room_id)
+        if not room:
+            return
+        members_data = []
+        for username in room['members']:
+            user = mock.get_user(username)
+            if user:
+                members_data.append({
+                    'username': username,
+                    'nickname': user['nickname'],
+                    'online':   user['online'],
+                    'is_coord': username == room['coordinator']
+                })
+        emit('members_data', {
+            'room_id': room_id,
+            'name':    room['name'],
+            'members': members_data
+        })
 
 
 # --- PERSISTENCIA DE MENSAJES SIMULADOS ---
-# Guardan los mensajes generados client-side en el historial del servidor
-# para que persistan al navegar entre salas.
-# En el sistema real estos mensajes vendrían del servidor directamente.
 
 @socketio.on('sim_message')
 def handle_sim_message(data):
-    # Persiste un mensaje simulado de chat en el historial del servidor
     mock = client_sessions.get(request.sid)
     if mock:
         room_id = data.get('room_id')
@@ -159,7 +174,6 @@ def handle_sim_message(data):
 
 @socketio.on('sim_system')
 def handle_sim_system(data):
-    # Persiste un mensaje de sistema simulado en el historial del servidor
     mock = client_sessions.get(request.sid)
     if mock:
         room_id = data.get('room_id')
@@ -170,8 +184,7 @@ def handle_sim_system(data):
 
 @socketio.on('sim_leave')
 def handle_sim_leave(data):
-    # Simula que un usuario abandona voluntariamente la sala
-    # Lo quita de los members para que el coordinator panel lo refleje correctamente
+    # Quita al usuario de members para que el coordinator panel lo refleje
     # AQUÍ IRÍA: el servidor recibiría este evento del cliente que sale
     mock = client_sessions.get(request.sid)
     if mock:
@@ -181,6 +194,35 @@ def handle_sim_leave(data):
             mock.kick_user(room_id, username)
 
 
+@socketio.on('sim_create_room')
+def handle_sim_create_room(data):
+    # Simula que otro usuario crea una sala nueva
+    # AQUÍ IRÍA: el servidor notificaría este evento a todos los clientes conectados
+    mock = client_sessions.get(request.sid)
+    if mock:
+        name             = data.get('name', '').strip()
+        creator_username = data.get('creator_username', '')
+        if not name or not creator_username:
+            return
+
+        room_id  = name.lower().replace(' ', '-')
+        new_room = {
+            "id":            room_id,
+            "name":          name,
+            "coordinator":   creator_username,
+            "members":       [creator_username],
+            "notifications": 0,
+        }
+        mock.rooms.append(new_room)
+        mock.messages[room_id] = []
+        mock.requests[room_id] = []
+
+        creator      = mock.get_user(creator_username)
+        creator_nick = creator['nickname'] if creator else creator_username
+
+        send_lobby_update(request.sid)
+
+
 # --- COORDINADOR ---
 
 @socketio.on('get_coord_data')
@@ -188,16 +230,13 @@ def handle_coord_data(data):
     mock = client_sessions.get(request.sid)
     if mock:
         room_id   = data.get('room_id')
-        requests  = mock.get_join_requests(room_id)
-        members   = mock.get_members(room_id)
-        all_users = mock.get_all_users()
         room      = mock.get_room(room_id)
         emit('coord_data', {
             'room_id':     room_id,
             'coordinator': room['coordinator'] if room else '',
-            'requests':    requests,
-            'members':     members,
-            'all_users':   all_users
+            'requests':    mock.get_join_requests(room_id),
+            'members':     mock.get_members(room_id),
+            'all_users':   mock.get_all_users()
         })
 
 
@@ -216,8 +255,7 @@ def handle_coord_action(data):
         # AQUÍ IRÍA: network_client.send("COORD_ACCEPT_USER", room_id, target_user)
         mock.accept_request(room_id, target_user)
         mock.messages.setdefault(room_id, []).append(
-            ("__SYSTEM__", f"{target_nick} was accepted into the room.")
-        )
+            ("__SYSTEM__", f"{target_nick} was accepted into the room."))
         emit('system_event', {'room_id': room_id, 'text': f"{target_nick} was accepted into the room."})
 
     elif action == 'reject':
@@ -229,20 +267,17 @@ def handle_coord_action(data):
         # AQUÍ IRÍA: network_client.send("COORD_KICK_USER", room_id, target_user)
         mock.kick_user(room_id, target_user)
         mock.messages.setdefault(room_id, []).append(
-            ("__SYSTEM__", f"{target_nick} was removed from the room.")
-        )
+            ("__SYSTEM__", f"{target_nick} was removed from the room."))
         emit('system_event', {'room_id': room_id, 'text': f"{target_nick} was removed from the room."})
 
     elif action == 'add':
-        # Añadir usuario directamente sin solicitud previa
         # AQUÍ IRÍA: network_client.send("COORD_INVITE_USER", room_id, target_user)
         room = mock.get_room(room_id)
         if room and target_user not in room['members']:
             room['members'].append(target_user)
         mock.reject_request(room_id, target_user)
         mock.messages.setdefault(room_id, []).append(
-            ("__SYSTEM__", f"{target_nick} was added to the room.")
-        )
+            ("__SYSTEM__", f"{target_nick} was added to the room."))
         emit('system_event', {'room_id': room_id, 'text': f"{target_nick} was added to the room."})
 
     elif action == 'delete':
@@ -253,7 +288,6 @@ def handle_coord_action(data):
             send_lobby_update(request.sid)
             return
 
-    # Refrescar panel de coordinador y lobby
     handle_coord_data({'room_id': room_id})
     send_lobby_update(request.sid)
 

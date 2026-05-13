@@ -1,6 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
 //  main.js — PIMENTEL CO. Web Frontend
-//  Feature parity with desktop (app.py)
 // ═══════════════════════════════════════════════════════════════
 
 const socket = io();
@@ -10,25 +9,18 @@ let currentUser     = "";
 let currentNickname = "";
 let activeRoom      = null;
 let isCoordinator   = false;
+let lobbyData       = { rooms: [], users: [], all_users: [] };
+let allUsersMap     = {};
+let pendingRooms    = new Set();
+let simLeft         = {};
+let activeToasts    = [];
 
-// Datos del lobby (salas y usuarios)
-let lobbyData = { rooms: [], users: [], all_users: [] };
-
-// Mapa username → {nickname, online} para lookup rápido
-let allUsersMap = {};
-
-// Salas donde el usuario ya mandó solicitud pendiente
-let pendingRooms = new Set();
-
-// Usuarios que "salieron" en la simulación por sala: {room_id: Set de usernames}
-let simLeft = {};
-
-// Control de toasts activos
-let activeToasts = [];
+// Nombres de salas para la simulación de creación
+const SIM_ROOM_NAMES = ["ops-team", "security", "backend", "qa-testing", "design", "infra", "alerts"];
 
 
 // ═══════════════════════════════════════════════════════════════
-//  NAVEGACIÓN DE VISTAS
+//  NAVEGACIÓN
 // ═══════════════════════════════════════════════════════════════
 
 function switchView(viewId) {
@@ -43,31 +35,26 @@ function switchScreen(screenId) {
 
 
 // ═══════════════════════════════════════════════════════════════
-//  CUSTOM DIALOGS (reemplazan alert/confirm nativos del browser)
+//  CUSTOM DIALOGS
 // ═══════════════════════════════════════════════════════════════
 
 function customConfirm(title, message, onConfirm, onCancel) {
     document.getElementById('confirm-title').innerText = title;
     document.getElementById('confirm-msg').innerText   = message;
-
-    const bg    = document.getElementById('modal-bg');
-    const modal = document.getElementById('modal-confirm');
-
     document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
 
     document.getElementById('confirm-ok').onclick = () => {
-        bg.style.display    = 'none';
-        modal.style.display = 'none';
+        document.getElementById('modal-bg').style.display    = 'none';
+        document.getElementById('modal-confirm').style.display = 'none';
         if (onConfirm) onConfirm();
     };
     document.getElementById('confirm-cancel').onclick = () => {
-        bg.style.display    = 'none';
-        modal.style.display = 'none';
+        document.getElementById('modal-bg').style.display    = 'none';
+        document.getElementById('modal-confirm').style.display = 'none';
         if (onCancel) onCancel();
     };
-
-    bg.style.display    = 'block';
-    modal.style.display = 'block';
+    document.getElementById('modal-bg').style.display      = 'block';
+    document.getElementById('modal-confirm').style.display = 'block';
 }
 
 function customInfo(title, message, color) {
@@ -76,19 +63,14 @@ function customInfo(title, message, color) {
     document.getElementById('info-msg').innerText        = message;
     document.getElementById('info-top').style.background = color;
     document.getElementById('info-ok').style.background  = color;
-
-    const bg    = document.getElementById('modal-bg');
-    const modal = document.getElementById('modal-info');
-
     document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
 
     document.getElementById('info-ok').onclick = () => {
-        bg.style.display    = 'none';
-        modal.style.display = 'none';
+        document.getElementById('modal-bg').style.display   = 'none';
+        document.getElementById('modal-info').style.display = 'none';
     };
-
-    bg.style.display    = 'block';
-    modal.style.display = 'block';
+    document.getElementById('modal-bg').style.display   = 'block';
+    document.getElementById('modal-info').style.display = 'block';
 }
 
 
@@ -100,21 +82,14 @@ document.getElementById('btn-login').onclick = () => {
     const user = document.getElementById('log-user').value.trim();
     const pass = document.getElementById('log-pass').value.trim();
     const err  = document.getElementById('log-error');
-
     if (!user) { err.innerText = "◆ Username cannot be empty."; return; }
     if (!pass) { err.innerText = "◆ Password cannot be empty."; return; }
     err.innerText = "";
-
-    // AQUÍ IRÍA: network_client.send("AUTH_LOGIN", user, pass)
     socket.emit('login', { username: user, password: pass });
 };
 
-document.getElementById('log-user').addEventListener('keypress', e => {
-    if (e.key === 'Enter') document.getElementById('log-pass').focus();
-});
-document.getElementById('log-pass').addEventListener('keypress', e => {
-    if (e.key === 'Enter') document.getElementById('btn-login').click();
-});
+document.getElementById('log-user').addEventListener('keypress', e => { if (e.key === 'Enter') document.getElementById('log-pass').focus(); });
+document.getElementById('log-pass').addEventListener('keypress', e => { if (e.key === 'Enter') document.getElementById('btn-login').click(); });
 
 socket.on('login_success', data => {
     currentUser     = data.username;
@@ -141,14 +116,8 @@ document.getElementById('btn-register').onclick = () => {
     if (!nick)           { err.innerText = "◆ Display name cannot be empty.";            return; }
     if (!pass)           { err.innerText = "◆ Password cannot be empty.";                return; }
     if (pass.length < 6) { err.innerText = "◆ Password must be at least 6 characters."; return; }
-    if (pass !== confirm) {
-        err.innerText = "◆ Passwords do not match.";
-        document.getElementById('reg-confirm').value = '';
-        return;
-    }
+    if (pass !== confirm) { err.innerText = "◆ Passwords do not match."; document.getElementById('reg-confirm').value = ''; return; }
     err.innerText = "";
-
-    // AQUÍ IRÍA: network_client.send("AUTH_REGISTER", user, pass, nick)
     socket.emit('register', { username: user, nickname: nick, password: pass });
 };
 
@@ -173,15 +142,12 @@ socket.on('register_success', data => {
 
 socket.on('lobby_update', data => {
     lobbyData = data;
-
-    // Reconstruir mapa de todos los usuarios para lookup rápido
     allUsersMap = {};
     if (data.all_users) {
         data.all_users.forEach(u => { allUsersMap[u.username] = u; });
     }
-
     updateChannelList();
-    updateOnlineList();
+    updateUsersList();
 });
 
 function updateChannelList() {
@@ -197,20 +163,21 @@ function updateChannelList() {
     });
 }
 
-function updateOnlineList() {
-    const ol = document.getElementById('online-list');
-    ol.innerHTML = '';
-    lobbyData.users.forEach(u => {
-        const li = document.createElement('li');
-        li.innerHTML = `<span class="status-dot online-dot">●</span> ${u.nickname}`;
-        ol.appendChild(li);
+function updateUsersList() {
+    // Muestra TODOS los usuarios (online y offline) con dots de color
+    const ul = document.getElementById('users-list');
+    ul.innerHTML = '';
+    const allUsers = lobbyData.all_users || lobbyData.users || [];
+    allUsers.forEach(u => {
+        const li      = document.createElement('li');
+        const dotCls  = u.online ? 'online-dot' : 'offline-dot';
+        li.innerHTML  = `<span class="status-dot ${dotCls}">●</span> ${u.nickname}`;
+        ul.appendChild(li);
     });
 }
 
 function selectRoom(r) {
     activeRoom = r.id;
-
-    // Limpiar notificaciones al seleccionar
     r.notifications = 0;
     updateChannelList();
 
@@ -219,7 +186,7 @@ function selectRoom(r) {
     } else {
         document.getElementById('private-title').innerText = `# ${r.name}`;
         const isPending = pendingRooms.has(r.id);
-        document.getElementById('private-not-requested').style.display = isPending ? 'none'  : 'block';
+        document.getElementById('private-not-requested').style.display = isPending ? 'none' : 'flex';
         document.getElementById('private-pending').style.display       = isPending ? 'block' : 'none';
         switchScreen('private-room-screen');
     }
@@ -236,36 +203,30 @@ socket.on('chat_view_data', data => {
 
     document.getElementById('chat-title').innerText = `# ${data.name}`;
 
-    // Indicador de rol
     const roleEl     = document.getElementById('role-indicator');
     roleEl.innerText = data.is_coord ? 'COORDINATOR' : 'MEMBER';
     roleEl.className = `role-badge ${data.is_coord ? 'role-coord' : 'role-member'}`;
 
-    // Visibilidad de botones según rol
-    document.getElementById('btn-manage').style.display = data.is_coord ? 'inline-block' : 'none';
-    document.getElementById('btn-leave').style.display  = data.is_coord ? 'none' : 'inline-block';
+    // Botones según rol
+    document.getElementById('btn-manage').style.display  = data.is_coord ? 'inline-block' : 'none';
+    document.getElementById('btn-leave').style.display   = data.is_coord ? 'none' : 'inline-block';
+    document.getElementById('btn-members').style.display = data.is_coord ? 'none' : 'inline-block';
 
-    // Cargar historial — incluye mensajes simulados persistidos en el servidor
     const hist = document.getElementById('chat-history');
     hist.innerHTML = '<div class="sys-msg">◆ Connected to node.</div>';
-    if (data.history) {
-        data.history.forEach(m => appendMsg(m[0], m[1]));
-    }
+    if (data.history) data.history.forEach(m => appendMsg(m[0], m[1]));
 
     switchScreen('chat-screen');
     document.getElementById('chat-input').focus();
 });
 
 document.getElementById('btn-send').onclick = sendMessage;
-document.getElementById('chat-input').addEventListener('keypress', e => {
-    if (e.key === 'Enter') sendMessage();
-});
+document.getElementById('chat-input').addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
 
 function sendMessage() {
     const inp  = document.getElementById('chat-input');
     const text = inp.value.trim();
     if (text && activeRoom) {
-        // AQUÍ IRÍA: network_client.send("CHAT_SEND_MSG", activeRoom, text)
         socket.emit('send_message', { room_id: activeRoom, text });
         inp.value = '';
     }
@@ -285,9 +246,7 @@ socket.on('new_message', data => {
 });
 
 socket.on('system_event', data => {
-    if (data.room_id === activeRoom) {
-        appendMsg('__SYSTEM__', data.text);
-    }
+    if (data.room_id === activeRoom) appendMsg('__SYSTEM__', data.text);
 });
 
 function appendMsg(sender, text) {
@@ -302,12 +261,46 @@ function appendMsg(sender, text) {
 
 
 // ═══════════════════════════════════════════════════════════════
+//  MEMBERS PANEL (para usuarios no coordinadores)
+// ═══════════════════════════════════════════════════════════════
+
+function openMembersPanel() {
+    if (!activeRoom) return;
+    socket.emit('get_members_data', { room_id: activeRoom });
+    openModal('modal-members');
+}
+
+socket.on('members_data', data => {
+    document.getElementById('members-title').innerText = `# ${data.name}`;
+    document.getElementById('members-count').innerText = `${data.members.length} member(s)`;
+
+    const list = document.getElementById('members-list');
+    list.innerHTML = '';
+
+    data.members.forEach(m => {
+        const dotCls = m.online ? 'online-dot' : 'offline-dot';
+        let label    = m.nickname;
+        if (m.is_coord)              label += ' <span class="muted-text">[COORD]</span>';
+        if (m.username === currentUser) label += ' <span class="muted-text">(you)</span>';
+
+        const row = document.createElement('div');
+        row.className = 'coord-row';
+        row.innerHTML = `
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span class="status-dot ${dotCls}">●</span>
+                <span>${label}</span>
+            </div>`;
+        list.appendChild(row);
+    });
+});
+
+
+// ═══════════════════════════════════════════════════════════════
 //  ACCIONES DE SALA
 // ═══════════════════════════════════════════════════════════════
 
 function requestJoinRoom() {
     if (!activeRoom) return;
-    // AQUÍ IRÍA: network_client.send("LOBBY_JOIN_REQUEST", activeRoom)
     socket.emit('request_join', { room_id: activeRoom });
 }
 
@@ -324,15 +317,11 @@ socket.on('join_request_result', data => {
 function leaveRoom() {
     if (!activeRoom) return;
     customConfirm('LEAVE ROOM', 'Are you sure you want to leave this room?', () => {
-        // AQUÍ IRÍA: network_client.send("LOBBY_LEAVE_ROOM", activeRoom)
         socket.emit('leave_room', { room_id: activeRoom });
     });
 }
 
-socket.on('left_room', () => {
-    activeRoom = null;
-    switchScreen('welcome-screen');
-});
+socket.on('left_room', () => { activeRoom = null; switchScreen('welcome-screen'); });
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -342,16 +331,15 @@ socket.on('left_room', () => {
 function createRoom() {
     const name  = document.getElementById('new-room-name').value.trim();
     const errEl = document.getElementById('create-room-error');
-
     if (!name)           { errEl.innerText = "◆ Room name cannot be empty.";               return; }
     if (name.length < 3) { errEl.innerText = "◆ Room name must be at least 3 characters."; return; }
     errEl.innerText = "";
-
-    // AQUÍ IRÍA: network_client.send("COORD_CREATE_ROOM", name)
     socket.emit('create_room', { name });
     document.getElementById('new-room-name').value = '';
     closeModals();
 }
+
+document.getElementById('new-room-name').addEventListener('keypress', e => { if (e.key === 'Enter') createRoom(); });
 
 socket.on('room_created', data => {
     activeRoom = data.room_id;
@@ -369,7 +357,6 @@ socket.on('create_room_error', data => {
 
 function openCoordPanel() {
     if (!activeRoom) return;
-    // AQUÍ IRÍA: network_client.request("COORD_LIST_REQUESTS", activeRoom)
     socket.emit('get_coord_data', { room_id: activeRoom });
     openModal('modal-coord');
 }
@@ -378,10 +365,9 @@ socket.on('coord_data', data => {
     const room = lobbyData.rooms.find(r => r.id === data.room_id);
     document.getElementById('coord-title').innerText = `# ${room ? room.name : data.room_id}`;
 
-    // --- PENDING REQUESTS ---
+    // PENDING REQUESTS
     const reqDiv = document.getElementById('coord-requests');
     reqDiv.innerHTML = '';
-
     if (!data.requests || data.requests.length === 0) {
         reqDiv.innerHTML = '<p class="muted-text" style="font-size:13px; padding:5px 0;">No pending requests.</p>';
     } else {
@@ -391,49 +377,40 @@ socket.on('coord_data', data => {
             row.innerHTML = `
                 <span>● ${r.nickname}</span>
                 <div>
-                    <span class="coord-btn success-text"
-                          onclick="coordAction('accept','${r.username}','${r.nickname}')">✓</span>
-                    <span class="coord-btn error-text" style="margin-left:10px;"
-                          onclick="coordAction('reject','${r.username}','${r.nickname}')">✕</span>
+                    <span class="coord-btn success-text" onclick="coordAction('accept','${r.username}','${r.nickname}')">✓</span>
+                    <span class="coord-btn error-text" style="margin-left:10px;" onclick="coordAction('reject','${r.username}','${r.nickname}')">✕</span>
                 </div>`;
             reqDiv.appendChild(row);
         });
     }
 
-    // --- ALL USERS ---
+    // ALL USERS
     const usrDiv = document.getElementById('coord-users');
     usrDiv.innerHTML = '';
-
     if (!data.all_users || data.all_users.length === 0) {
         usrDiv.innerHTML = '<p class="muted-text" style="font-size:13px;">No users available.</p>';
     } else {
         data.all_users.forEach(u => {
             const isMember = data.members && data.members.includes(u.username);
             const isCoord  = u.username === data.coordinator;
-            const dotClass = `status-dot ${u.online ? 'online-dot' : 'offline-dot'}`;
-
-            let label = u.nickname;
+            const dotCls   = `status-dot ${u.online ? 'online-dot' : 'offline-dot'}`;
+            let label      = u.nickname;
             if (isCoord) label += ' <span class="muted-text">[COORD]</span>';
 
             let actionBtn = '';
             if (isMember) {
-                if (u.username === currentUser) {
-                    actionBtn = '<span class="muted-text" style="font-size:12px; font-weight:bold;">YOU</span>';
-                } else {
-                    actionBtn = `<span class="coord-btn error-text"
-                                       onclick="coordActionWithConfirm('kick','${u.username}','${u.nickname}')">KICK</span>`;
-                }
+                actionBtn = u.username === currentUser
+                    ? '<span class="muted-text" style="font-size:12px; font-weight:bold;">YOU</span>'
+                    : `<span class="coord-btn error-text" onclick="coordActionWithConfirm('kick','${u.username}','${u.nickname}')">KICK</span>`;
             } else {
-                actionBtn = `<span class="coord-btn accent-text"
-                                   onclick="coordAction('add','${u.username}','${u.nickname}')">ADD</span>`;
+                actionBtn = `<span class="coord-btn accent-text" onclick="coordAction('add','${u.username}','${u.nickname}')">ADD</span>`;
             }
 
             const row = document.createElement('div');
             row.className = 'coord-row';
             row.innerHTML = `
                 <div style="display:flex; align-items:center; gap:8px;">
-                    <span class="${dotClass}">●</span>
-                    <span>${label}</span>
+                    <span class="${dotCls}">●</span><span>${label}</span>
                 </div>
                 ${actionBtn}`;
             usrDiv.appendChild(row);
@@ -442,19 +419,11 @@ socket.on('coord_data', data => {
 });
 
 function coordAction(action, username, nickname) {
-    // AQUÍ IRÍA: network_client.send("COORD_ACTION", action, activeRoom, username)
-    socket.emit('coord_action', {
-        action,
-        room_id:     activeRoom,
-        target_user: username,
-        target_nick: nickname
-    });
+    socket.emit('coord_action', { action, room_id: activeRoom, target_user: username, target_nick: nickname });
 }
 
 function coordActionWithConfirm(action, username, nickname) {
-    customConfirm('KICK USER', `Remove ${nickname} from the room?`, () => {
-        coordAction(action, username, nickname);
-    });
+    customConfirm('KICK USER', `Remove ${nickname} from the room?`, () => coordAction(action, username, nickname));
 }
 
 function deleteRoom() {
@@ -465,9 +434,7 @@ function deleteRoom() {
 
 socket.on('room_deleted_result', data => {
     if (data.success) {
-        closeModals();
-        activeRoom = null;
-        switchScreen('welcome-screen');
+        closeModals(); activeRoom = null; switchScreen('welcome-screen');
     } else {
         customInfo('WARNING', 'You can only delete a room when you are the last member.', 'var(--warning)');
     }
@@ -489,7 +456,6 @@ document.getElementById('user-panel').onclick = () => {
 function updateProfile() {
     const newNick = document.getElementById('edit-nick').value.trim();
     if (!newNick) { customInfo('WARNING', 'Display name cannot be empty.', 'var(--warning)'); return; }
-    // AQUÍ IRÍA: network_client.send("UPDATE_PROFILE", newNick)
     socket.emit('update_profile', { nickname: newNick });
     closeModals();
 }
@@ -519,13 +485,9 @@ function handleModalBgClick(e) {
     if (e.target.id === 'modal-bg') closeModals();
 }
 
-document.getElementById('new-room-name').addEventListener('keypress', e => {
-    if (e.key === 'Enter') createRoom();
-});
-
 
 // ═══════════════════════════════════════════════════════════════
-//  TOAST NOTIFICATIONS
+//  TOASTS
 // ═══════════════════════════════════════════════════════════════
 
 function showToast(roomId, roomName, sender, message) {
@@ -534,10 +496,7 @@ function showToast(roomId, roomName, sender, message) {
     const container = document.getElementById('toast-container');
     const toast     = document.createElement('div');
     toast.className = 'toast';
-
-    const preview = message.length > 38
-        ? message.substring(0, 38) + '...'
-        : message;
+    const preview   = message.length > 38 ? message.substring(0, 38) + '...' : message;
 
     toast.innerHTML = `
         <div class="toast-header">
@@ -546,15 +505,10 @@ function showToast(roomId, roomName, sender, message) {
         </div>
         <div class="toast-body">${sender}: ${preview}</div>`;
 
-    toast.querySelector('.toast-close').onclick = (e) => {
-        e.stopPropagation();
-        closeToast(toast);
-    };
-
+    toast.querySelector('.toast-close').onclick = (e) => { e.stopPropagation(); closeToast(toast); };
     toast.onclick = () => toastClick(toast, roomId);
     container.appendChild(toast);
     activeToasts.push(toast);
-
     toast._timer = setTimeout(() => closeToast(toast), 4000);
 }
 
@@ -568,8 +522,7 @@ function toastClick(toast, roomId) {
     closeToast(toast);
     const room = lobbyData.rooms.find(r => r.id === roomId);
     if (room && room.members && room.members.includes(currentUser)) {
-        activeRoom         = roomId;
-        room.notifications = 0;
+        activeRoom = roomId; room.notifications = 0;
         updateChannelList();
         socket.emit('join_chat_view', { room_id: roomId });
     }
@@ -578,24 +531,23 @@ function toastClick(toast, roomId) {
 
 // ═══════════════════════════════════════════════════════════════
 //  SIMULACIONES
-//  Equivalente a _simulate_incoming_messages y _simulate_user_leave
-//  del desktop. Los mensajes y eventos se persisten en el servidor
-//  para que sobrevivan la navegación entre salas.
 // ═══════════════════════════════════════════════════════════════
 
-let msgSimTimer   = null;
-let leaveSimTimer = null;
+let msgSimTimer    = null;
+let leaveSimTimer  = null;
+let roomSimTimer   = null;
 
 function startSimulations() {
     if (msgSimTimer)   clearInterval(msgSimTimer);
     if (leaveSimTimer) clearInterval(leaveSimTimer);
+    if (roomSimTimer)  clearInterval(roomSimTimer);
 
     // Mensajes entrantes cada 12 segundos
-    // AQUÍ IRÍA: el hilo real de escucha del NetworkClient
     msgSimTimer   = setInterval(simulateIncomingMessage, 12000);
-
     // Usuario saliendo cada 30 segundos
     leaveSimTimer = setInterval(simulateUserLeave, 30000);
+    // Sala nueva creada por otro usuario cada 45 segundos
+    roomSimTimer  = setInterval(simulateRoomCreation, 45000);
 }
 
 function getMyRooms() {
@@ -603,7 +555,6 @@ function getMyRooms() {
 }
 
 function getMemberSenders(room) {
-    // Obtener nicknames de miembros reales excluyendo al usuario actual y a los sim_left
     const left = simLeft[room.id] || new Set();
     return room.members
         .filter(u => u !== currentUser && !left.has(u))
@@ -620,21 +571,16 @@ function simulateIncomingMessage() {
     if (senders.length === 0) return;
 
     const sender   = senders[Math.floor(Math.random() * senders.length)];
-    const messages = [
-        "Hey, anyone there?", "Check this out.", "Meeting in 5.",
-        "Server looks good.", "Deploy done.", "Need a review."
-    ];
-    const text = messages[Math.floor(Math.random() * messages.length)];
+    const messages = ["Hey, anyone there?", "Check this out.", "Meeting in 5.",
+                      "Server looks good.", "Deploy done.", "Need a review."];
+    const text     = messages[Math.floor(Math.random() * messages.length)];
 
-    // Persistir en el servidor para que sobreviva la navegación
-    // AQUÍ IRÍA: el servidor mandaría este evento a todos los miembros
+    // Persistir en servidor
     socket.emit('sim_message', { room_id: room.id, sender, text });
 
     if (room.id === activeRoom) {
-        // Sala activa: mostrar directo en el chat
         appendMsg(sender, text);
     } else {
-        // Sala en segundo plano: badge + toast
         room.notifications = (room.notifications || 0) + 1;
         updateChannelList();
         showToast(room.id, room.name, sender, text);
@@ -652,35 +598,45 @@ function simulateUserLeave() {
 
     const leaverUsername = candidates[Math.floor(Math.random() * candidates.length)];
     const leaverNick     = allUsersMap[leaverUsername]
-        ? allUsersMap[leaverUsername].nickname
-        : leaverUsername;
+        ? allUsersMap[leaverUsername].nickname : leaverUsername;
 
-    // Registrar como "salido" para no simular más mensajes de este usuario
     if (!simLeft[room.id]) simLeft[room.id] = new Set();
     simLeft[room.id].add(leaverUsername);
 
     const msg = `${leaverNick} has left the room.`;
 
-    // Persistir mensaje de sistema en el servidor
-    // AQUÍ IRÍA: el servidor mandaría este evento a todos los miembros
+    // Persistir mensaje de sistema y quitar de members en servidor
     socket.emit('sim_system', { room_id: room.id, text: msg });
+    socket.emit('sim_leave',  { room_id: room.id, username: leaverUsername });
 
-    // Quitar al usuario de los members en el servidor
-    // Así el coordinator panel refleja correctamente que salió
-    // AQUÍ IRÍA: el servidor procesaría el evento de salida del cliente
-    socket.emit('sim_leave', { room_id: room.id, username: leaverUsername });
-
-    // Actualizar members localmente también para que getMyRooms sea consistente
+    // Actualizar members localmente para consistencia
     const idx = room.members.indexOf(leaverUsername);
     if (idx !== -1) room.members.splice(idx, 1);
 
     if (room.id === activeRoom) {
-        // Sala activa: mostrar mensaje de sistema directo
         appendMsg('__SYSTEM__', msg);
     } else {
-        // Sala en segundo plano: badge + toast
         room.notifications = (room.notifications || 0) + 1;
         updateChannelList();
         showToast(room.id, room.name, '◆ System', `${leaverNick} has left.`);
     }
+}
+
+function simulateRoomCreation() {
+    // Simula que otro usuario crea una sala nueva
+    const existing  = lobbyData.rooms.map(r => r.name);
+    const available = SIM_ROOM_NAMES.filter(n => !existing.includes(n));
+    if (available.length === 0) return;
+
+    const name       = available[Math.floor(Math.random() * available.length)];
+    const others     = Object.values(allUsersMap).filter(u => u.online);
+    if (others.length === 0) return;
+
+    const creator = others[Math.floor(Math.random() * others.length)];
+
+    // El servidor crea la sala y emite new_room_notification
+    socket.emit('sim_create_room', {
+        name:             name,
+        creator_username: creator.username
+    });
 }

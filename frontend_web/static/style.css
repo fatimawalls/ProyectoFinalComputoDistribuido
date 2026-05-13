@@ -323,6 +323,12 @@ body {
     padding: 30px;
 }
 
+#private-not-requested {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
 /* ══════════════════════════════════
    CHAT SCREEN
    ══════════════════════════════════ */

@@ -1,0 +1,3 @@
+user:1
+chatroom:1
+message:1

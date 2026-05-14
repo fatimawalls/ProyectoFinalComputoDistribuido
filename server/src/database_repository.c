@@ -616,4 +616,290 @@ static Message jsonToMessage(cJSON *json)
 
     return message;
 }
-/*-----------utilidades auth----------------*/
+/* -------------utilidades auth-----------------------*/
+User *getAllUsers(int *count)
+{
+    char *content = readFile(USERS_FILE);
+
+    cJSON *root = cJSON_Parse(content);
+
+    *count = cJSON_GetArraySize(root);
+
+    User *users = malloc(
+        sizeof(User) * (*count)
+    );
+
+    for(int i = 0; i < *count; i++)
+    {
+        users[i] = jsonToUser(
+            cJSON_GetArrayItem(root, i)
+        );
+    }
+
+    free(content);
+
+    cJSON_Delete(root);
+
+    return users;
+}
+
+ChatRoom *getAllChatRooms(int *count)
+{
+    char *content = readFile(CHATROOMS_FILE);
+
+    cJSON *root = cJSON_Parse(content);
+
+    *count = cJSON_GetArraySize(root);
+
+    ChatRoom *rooms = malloc(
+        sizeof(ChatRoom) * (*count)
+    );
+
+    for(int i = 0; i < *count; i++)
+    {
+        rooms[i] = jsonToChatRoom(
+            cJSON_GetArrayItem(root, i)
+        );
+    }
+
+    free(content);
+
+    cJSON_Delete(root);
+
+    return rooms;
+}
+
+Message *getAllMessages(int *count)
+{
+    char *content = readFile(MESSAGES_FILE);
+
+    cJSON *root = cJSON_Parse(content);
+
+    *count = cJSON_GetArraySize(root);
+
+    Message *messages = malloc(
+        sizeof(Message) * (*count)
+    );
+
+    for(int i = 0; i < *count; i++)
+    {
+        messages[i] = jsonToMessage(
+            cJSON_GetArrayItem(root, i)
+        );
+    }
+
+    free(content);
+
+    cJSON_Delete(root);
+
+    return messages;
+}
+
+static ChatRoom cloneChatRoom(ChatRoom *room)
+{
+    ChatRoom copy;
+
+    copy.id = room->id;
+
+    copy.name = strdup(room->name);
+
+    copy.coordinatorId = room->coordinatorId;
+
+    copy.userCount = room->userCount;
+
+    copy.userIds = malloc(
+        sizeof(int) * copy.userCount
+    );
+
+    memcpy(
+        copy.userIds,
+        room->userIds,
+        sizeof(int) * copy.userCount
+    );
+
+    copy.messageCount = room->messageCount;
+
+    copy.messageIds = malloc(
+        sizeof(int) * copy.messageCount
+    );
+
+    memcpy(
+        copy.messageIds,
+        room->messageIds,
+        sizeof(int) * copy.messageCount
+    );
+
+    return copy;
+}
+ChatRoom *getChatRoomsFromUser(int userId,int *count)
+{
+    User *user = getUserById(userId);
+
+    if(!user)
+    {
+        *count = 0;
+
+        return NULL;
+    }
+
+    int totalRooms;
+
+    ChatRoom *allRooms = getAllChatRooms(
+        &totalRooms
+    );
+
+    ChatRoom *result = malloc(
+        sizeof(ChatRoom) * user->chatRoomCount
+    );
+
+    int found = 0;
+
+    for(int i = 0; i < user->chatRoomCount; i++)
+    {
+        int roomId = user->chatRoomIds[i];
+
+        for(int j = 0; j < totalRooms; j++)
+        {
+            if(allRooms[j].id == roomId)
+            {
+               result[found++] = cloneChatRoom(&allRooms[j]);
+            }
+        }
+    }
+
+    *count = found;
+
+    freeUser(user);
+
+    free(user);
+
+    for(int i = 0; i < totalRooms; i++){
+    freeChatRoom(&allRooms[i]);
+    }
+
+    free(allRooms);
+
+    return result;
+}
+
+Message *getMessagesFromChatRoom(int chatRoomId,int *count)
+{
+    ChatRoom *room = getChatRoomById(
+        chatRoomId
+    );
+
+    if(!room)
+    {
+        *count = 0;
+
+        return NULL;
+    }
+
+    int totalMessages;
+
+    Message *allMessages = getAllMessages(
+        &totalMessages
+    );
+
+    Message *result = malloc(
+        sizeof(Message) * room->messageCount
+    );
+
+    int found = 0;
+
+    for(int i = 0; i < room->messageCount; i++)
+    {
+        int messageId = room->messageIds[i];
+
+        for(int j = 0; j < totalMessages; j++)
+        {
+            if(allMessages[j].id == messageId)
+            {
+                result[found++] = allMessages[j];
+            }
+        }
+    }
+
+    *count = found;
+
+    freeChatRoom(room);
+
+    free(room);
+
+    free(allMessages);
+
+    return result;
+}
+
+User *getUserById(int id)
+{
+    int count;
+
+    User *users = getAllUsers(&count);
+
+    for(int i = 0; i < count; i++)
+    {
+        if(users[i].id == id)
+        {
+            User *result = malloc(sizeof(User));
+
+            *result = users[i];
+
+            free(users);
+
+            return result;
+        }
+    }
+
+    free(users);
+
+    return NULL;
+}
+ChatRoom *getChatRoomById(int id)
+{
+    int count;
+
+    ChatRoom *rooms = getAllChatRooms(&count);
+
+    for(int i = 0; i < count; i++)
+    {
+        if(rooms[i].id == id)
+        {
+            ChatRoom *result = malloc(sizeof(ChatRoom));
+
+            *result = rooms[i];
+
+            free(rooms);
+
+            return result;
+        }
+    }
+
+    free(rooms);
+
+    return NULL;
+}
+Message *getMessageById(int id)
+{
+    int count;
+
+    Message *messages = getAllMessages(&count);
+
+    for(int i = 0; i < count; i++)
+    {
+        if(messages[i].id == id)
+        {
+            Message *result = malloc(sizeof(Message));
+
+            *result = messages[i];
+
+            free(messages);
+
+            return result;
+        }
+    }
+
+    free(messages);
+
+    return NULL;
+}

@@ -54,7 +54,41 @@ static int containsInt(int *array, int count, int value)
 }
 
 /*----------------user----------------*/
+static cJSON *userToJson(User *user)
+{
+    cJSON *json = cJSON_CreateObject();
 
+    cJSON_AddNumberToObject(
+        json,
+        "id",
+        user->id);
+
+    cJSON_AddStringToObject(
+        json,
+        "name",
+        user->name);
+
+    cJSON_AddStringToObject(
+        json,
+        "password",
+        user->password);
+
+    cJSON *rooms = cJSON_CreateArray();
+
+    for (int i = 0; i < user->chatRoomCount; i++)
+    {
+        cJSON_AddItemToArray(
+            rooms,
+            cJSON_CreateNumber(user->chatRoomIds[i]));
+    }
+
+    cJSON_AddItemToObject(
+        json,
+        "chatRoomsIds",
+        rooms);
+
+    return json;
+}
 
 User createUser(const char *name, const char *password)
 {
@@ -142,7 +176,43 @@ int updateUser(User *updatedUser)
 }
 
 /*----------------chatroom----------------*/
+static cJSON *chatRoomToJson(ChatRoom *room)
+{
+    cJSON *json = cJSON_CreateObject();
 
+    cJSON_AddNumberToObject(json, "id", room->id);
+
+    cJSON_AddStringToObject(json, "name", room->name);
+
+    cJSON_AddNumberToObject(json, "coordinatorId", room->coordinatorId);
+
+    cJSON *users = cJSON_CreateArray();
+
+    for (int i = 0; i < room->userCount; i++)
+    {
+        cJSON_AddItemToArray(
+            users,
+            cJSON_CreateNumber(room->userIds[i]));
+    }
+
+    cJSON_AddItemToObject(json, "userIds", users);
+
+    cJSON *messages = cJSON_CreateArray();
+
+    for (int i = 0; i < room->messageCount; i++)
+    {
+        cJSON_AddItemToArray(
+            messages,
+            cJSON_CreateNumber(room->messageIds[i]));
+    }
+
+    cJSON_AddItemToObject(
+        json,
+        "messageIds",
+        messages);
+
+    return json;
+}
 
 ChatRoom createChatRoom(const char *name, int coordinatorId)
 {
@@ -270,7 +340,20 @@ int updateChatRoom(ChatRoom *updatedRoom)
 
 /*----------------message----------------*/
 
+static cJSON *messageToJson(Message *message)
+{
+    cJSON *json = cJSON_CreateObject();
 
+    cJSON_AddNumberToObject(json, "id", message->id);
+
+    cJSON_AddNumberToObject(json, "userId", message->userId);
+
+    cJSON_AddNumberToObject(json, "chatRoomId", message->chatRoomId);
+
+    cJSON_AddStringToObject(json, "text", message->text);
+
+    return json;
+}
 
 Message createMessage(const char *text, int userId, int chatRoomId)
 {

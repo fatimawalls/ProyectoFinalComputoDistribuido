@@ -1,1 +1,19 @@
-[]
+[{
+		"id":	1,
+		"name":	"general",
+		"coordinatorId":	1,
+		"userIds":	[1],
+		"messageIds":	[1]
+	}, {
+		"id":	2,
+		"name":	"general",
+		"coordinatorId":	2,
+		"userIds":	[2],
+		"messageIds":	[]
+	}, {
+		"id":	3,
+		"name":	"prueba2",
+		"coordinatorId":	2,
+		"userIds":	[2],
+		"messageIds":	[2]
+	}]

@@ -1,13 +1,19 @@
-/*
- * server.c � ChatRoom Server
+﻿/*
+ * ChatRoomServer.c - ChatRoom Server con persistencia JSON
+ *
  * Arquitectura:
  *   - Padre: accept() + fork() en loop (TCP puerto 5000)
  *   - Hijo por cliente: auth + lobby (toda la vida de la conexion)
  *   - Hilo UDP (en padre): notificaciones push a clientes (UDP puerto 5001)
  *   - Memoria compartida + mutex: estado global (users, rooms, memberships)
+ *   - Persistencia: database_repository.c guarda todo en JSON
  *
- * Compilar: cc server.c -lpthread -o server
- * Ejecutar:  ./server
+ * Compilar:
+ *   gcc ChatRoomServer.c src/database_repository.c src/json_utils.c \
+ *       src/index_manager.c src/memory_utils.c libs/cJSON.c \
+ *       -Iinclude -Ilibs -lpthread -o chatserver
+ *
+ * Ejecutar: ./chatserver
  */
 
 #include <stdio.h>
@@ -21,60 +27,80 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/mman.h>   /* mmap para shared memory entre padre e hijos */
+#include <sys/mman.h>
 #include <fcntl.h>
 
- /* ??? Constantes ??????????????????????????????????????????????????????????? */
-#define TCP_PORT      5000
-#define UDP_PORT      5001
-#define MAX_USERS     64
-#define MAX_ROOMS     32
-#define MAX_MEMBERS   32
-#define MAX_PENDING   16
-#define BUFSIZE       1024
-#define USERS_FILE    "usuarios.txt"
+ /* Repositorio JSON */
+#include "models.h"
+#include "database_repository.h"
+#include "memory_utils.h"
 
-/* === Estructuras de estado global (van en shared memory) ================ */
+/* ============================================================
+   CONSTANTES
+   ============================================================ */
+#define TCP_PORT    5000
+#define UDP_PORT    5001
+#define MAX_USERS   64
+#define MAX_ROOMS   32
+#define MAX_MEMBERS 32
+#define MAX_PENDING 16
+#define BUFSIZE     1024
 
+   /* ============================================================
+      ESTRUCTURAS DE ESTADO GLOBAL (shared memory)
+      ============================================================ */
+
+      /*
+       * ShmUser: representa un usuario CONECTADO en este momento.
+       * db_user_id: ID que tiene ese usuario en users.json
+       */
 typedef struct {
-    int  id;
+    int  id;             /* slot id (1..MAX_USERS) */
+    int  db_user_id;     /* ID real en users.json  */
     char username[64];
     char nickname[64];
-    int  active;           /* 1 = conectado */
-    int  tcp_fd;           /* descriptor del socket TCP (solo valido en el hijo) */
-    char udp_ip[64];       /* IP del cliente para notificaciones UDP */
-    int  udp_port;         /* Puerto UDP del cliente */
-} User;
+    int  active;         /* 1 = conectado          */
+    int  tcp_fd;
+    char udp_ip[64];
+    int  udp_port;
+} ShmUser;
 
+/*
+ * ShmRoom: representa una sala activa en memoria.
+ * db_room_id: ID que tiene esa sala en chatRooms.json
+ */
 typedef struct {
-    int  id;
+    int  id;             /* slot id (1..MAX_ROOMS) */
+    int  db_room_id;     /* ID real en chatRooms.json */
     char name[64];
-    int  coordinator_id;
-    int  members[MAX_MEMBERS];     /* user ids */
+    int  coordinator_id; /* db_user_id del coordinador */
+    int  members[MAX_MEMBERS];   /* db_user_ids */
     int  member_count;
-    int  pending[MAX_PENDING];     /* user ids esperando aceptacion */
+    int  pending[MAX_PENDING];   /* db_user_ids esperando */
     int  pending_count;
     int  active;
-} Room;
+} ShmRoom;
 
 typedef struct {
-    User  users[MAX_USERS];
-    Room  rooms[MAX_ROOMS];
-    int   user_count;
-    int   room_count;
+    ShmUser users[MAX_USERS];
+    ShmRoom rooms[MAX_ROOMS];
+    int     user_count;
+    int     room_count;
     pthread_mutex_t lock;
 } SharedState;
 
-/* === Globales ============================================================ */
-static SharedState* g_state = NULL;   /* apunta a la shared memory */
-static int          g_tcp_sd = -1;    /* socket TCP principal */
-static int          g_udp_sd = -1;    /* socket UDP para notificaciones */
+/* ============================================================
+   GLOBALES
+   ============================================================ */
+static SharedState* g_state = NULL;
+static int          g_tcp_sd = -1;
+static int          g_udp_sd = -1;
 
-/* ==========================================================================
+/* ============================================================
    UTILIDADES DE RED
-   ========================================================================== */
+   ============================================================ */
 
-   /* Lee hasta '\n'. Devuelve bytes leidos, 0 o negativo en error/cierre */
+   /* Lee hasta '\n'. Devuelve bytes leidos, <=0 en error/cierre */
 int recv_line(int fd, char* buf, int maxlen) {
     int total = 0;
     char c;
@@ -88,19 +114,24 @@ int recv_line(int fd, char* buf, int maxlen) {
     return total;
 }
 
-/* Envia mensaje terminado en '\n' */
+/* Envia string terminado en '\n' */
 void send_line(int fd, const char* msg) {
     char buf[BUFSIZE];
     snprintf(buf, sizeof(buf), "%s\n", msg);
     send(fd, buf, strlen(buf), 0);
 }
 
-/* Envia notificacion UDP a un usuario especifico */
-void udp_notify(int user_id, const char* msg) {
+/* ============================================================
+   NOTIFICACIONES UDP
+   ============================================================ */
+
+   /* Envia notificacion UDP a un usuario por su db_user_id */
+void udp_notify(int db_user_id, const char* msg) {
     pthread_mutex_lock(&g_state->lock);
-    User* u = NULL;
+    ShmUser* u = NULL;
     for (int i = 0; i < MAX_USERS; i++) {
-        if (g_state->users[i].active && g_state->users[i].id == user_id) {
+        if (g_state->users[i].active &&
+            g_state->users[i].db_user_id == db_user_id) {
             u = &g_state->users[i];
             break;
         }
@@ -122,12 +153,13 @@ void udp_notify(int user_id, const char* msg) {
         (struct sockaddr*)&dest, sizeof(dest));
 }
 
-/* Notifica a todos los miembros de una room */
-void udp_notify_room(int room_id, const char* msg) {
+/* Notifica a todos los miembros de una sala por db_room_id */
+void udp_notify_room(int db_room_id, const char* msg) {
     pthread_mutex_lock(&g_state->lock);
-    Room* r = NULL;
+    ShmRoom* r = NULL;
     for (int i = 0; i < MAX_ROOMS; i++) {
-        if (g_state->rooms[i].active && g_state->rooms[i].id == room_id) {
+        if (g_state->rooms[i].active &&
+            g_state->rooms[i].db_room_id == db_room_id) {
             r = &g_state->rooms[i];
             break;
         }
@@ -141,92 +173,103 @@ void udp_notify_room(int room_id, const char* msg) {
     for (int i = 0; i < mc; i++) udp_notify(members[i], msg);
 }
 
-/* ==========================================================================
-   AUTENTICACION
-   ========================================================================== */
+/* ============================================================
+   AUTENTICACION  (usa users.json via database_repository)
+   ============================================================ */
 
-int buscar_usuario(const char* usuario, char* pass_out, int maxlen) {
-    FILE* f = fopen(USERS_FILE, "r");
-    if (!f) return 0;
-    char linea[BUFSIZE];
-    while (fgets(linea, sizeof(linea), f)) {
-        linea[strcspn(linea, "\n")] = '\0';
-        char* sep = strchr(linea, ':');
-        if (!sep) continue;
-        *sep = '\0';
-        if (strcmp(linea, usuario) == 0) {
-            strncpy(pass_out, sep + 1, maxlen - 1);
-            pass_out[maxlen - 1] = '\0';
-            fclose(f);
-            return 1;
+   /*
+    * Busca usuario en users.json por nombre.
+    * Devuelve 1 si existe, llena pass_out y db_id_out.
+    */
+static int buscar_usuario_json(const char* username,
+    char* pass_out, int pass_maxlen,
+    int* db_id_out)
+{
+    int count = 0;
+    User* users = getAllUsers(&count);
+    if (!users) return 0;
+
+    int found = 0;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(users[i].name, username) == 0) {
+            strncpy(pass_out, users[i].password, pass_maxlen - 1);
+            pass_out[pass_maxlen - 1] = '\0';
+            *db_id_out = users[i].id;
+            found = 1;
+            break;
         }
     }
-    fclose(f);
-    return 0;
-}
-
-int registrar_usuario(const char* usuario, const char* pass) {
-    char tmp[BUFSIZE];
-    if (buscar_usuario(usuario, tmp, sizeof(tmp))) return 0;
-    FILE* f = fopen(USERS_FILE, "a");
-    if (!f) return 0;
-    fprintf(f, "%s:%s\n", usuario, pass);
-    fclose(f);
-    return 1;
+    freeUsers(users, count);
+    return found;
 }
 
 /*
- * Maneja el intercambio de auth con el cliente.
- * Devuelve user_id asignado (>0) o -1 en fallo.
- * Rellena username_out y udp_port_out.
+ * Registra un usuario nuevo en users.json.
+ * Devuelve el db_id asignado, o -1 si ya existia.
+ */
+static int registrar_usuario_json(const char* username, const char* pass) {
+    char tmp[64]; int tmp_id = 0;
+    if (buscar_usuario_json(username, tmp, sizeof(tmp), &tmp_id)) return -1;
+
+    User u = createUser(username, pass);
+    saveUser(&u);
+    int new_id = u.id;
+    freeUser(&u);
+    return new_id;
+}
+
+/*
+ * Maneja el handshake de autenticacion con el cliente.
+ * Devuelve db_user_id (>0) o -1 en fallo.
  */
 int autenticar(int sock, const char* client_ip,
-    char* username_out, int* udp_port_out) {
+    char* username_out, int* udp_port_out)
+{
     char buf[BUFSIZE];
     send_line(sock, "AUTH_REQUERIDA");
 
     while (1) {
         if (recv_line(sock, buf, sizeof(buf)) <= 0) return -1;
 
-        /* Formato: "LOGIN:user:pass:udp_port"  o  "REGISTRO:user:pass" */
+        /* Formato esperado:
+         *   REGISTRO:user:pass
+         *   LOGIN:user:pass:udp_port
+         */
         char tipo[16], user[64], pass[64];
         int  uport = 0;
 
         char* p1 = strchr(buf, ':');
         if (!p1) { send_line(sock, "AUTH_FAIL:formato incorrecto"); continue; }
         *p1 = '\0';
-        strncpy(tipo, buf, sizeof(tipo) - 1); tipo[sizeof(tipo) - 1] = '\0';
+        strncpy(tipo, buf, sizeof(tipo) - 1);
 
         char* p2 = strchr(p1 + 1, ':');
         if (!p2) { send_line(sock, "AUTH_FAIL:formato incorrecto"); continue; }
         *p2 = '\0';
-        strncpy(user, p1 + 1, sizeof(user) - 1); user[sizeof(user) - 1] = '\0';
+        strncpy(user, p1 + 1, sizeof(user) - 1);
 
-        /* Si LOGIN, puede haber un cuarto campo udp_port */
         char* p3 = strchr(p2 + 1, ':');
-        if (p3) {
-            *p3 = '\0';
-            uport = atoi(p3 + 1);
-        }
-        strncpy(pass, p2 + 1, sizeof(pass) - 1); pass[sizeof(pass) - 1] = '\0';
+        if (p3) { *p3 = '\0'; uport = atoi(p3 + 1); }
+        strncpy(pass, p2 + 1, sizeof(pass) - 1);
 
         if (!strlen(user) || !strlen(pass)) {
             send_line(sock, "AUTH_FAIL:campos vacios"); continue;
         }
 
+        /* --- REGISTRO --- */
         if (strcmp(tipo, "REGISTRO") == 0) {
-            if (registrar_usuario(user, pass)) {
+            int new_id = registrar_usuario_json(user, pass);
+            if (new_id > 0)
                 send_line(sock, "REGISTRO_OK");
-            }
-            else {
+            else
                 send_line(sock, "REGISTRO_FAIL:usuario ya existe");
-            }
             continue;
         }
 
+        /* --- LOGIN --- */
         if (strcmp(tipo, "LOGIN") == 0) {
-            char stored[64];
-            if (!buscar_usuario(user, stored, sizeof(stored))) {
+            char stored[64]; int db_id = 0;
+            if (!buscar_usuario_json(user, stored, sizeof(stored), &db_id)) {
                 send_line(sock, "AUTH_FAIL:usuario no existe"); continue;
             }
             if (strcmp(stored, pass) != 0) {
@@ -244,200 +287,312 @@ int autenticar(int sock, const char* client_ip,
                 send_line(sock, "AUTH_FAIL:servidor lleno");
                 return -1;
             }
-            g_state->user_count++;
-            User* u = &g_state->users[slot];
+            ShmUser* u = &g_state->users[slot];
             u->id = slot + 1;
+            u->db_user_id = db_id;
             u->active = 1;
             u->tcp_fd = sock;
             u->udp_port = uport;
             strncpy(u->username, user, sizeof(u->username) - 1);
-            strncpy(u->nickname, user, sizeof(u->nickname) - 1); /* nickname = username por defecto */
+            strncpy(u->nickname, user, sizeof(u->nickname) - 1);
             strncpy(u->udp_ip, client_ip, sizeof(u->udp_ip) - 1);
-            int uid = u->id;
+            g_state->user_count++;
             pthread_mutex_unlock(&g_state->lock);
 
             strncpy(username_out, user, 63);
             *udp_port_out = uport;
 
             char resp[BUFSIZE];
-            snprintf(resp, sizeof(resp), "AUTH_OK:%d", uid);
+            snprintf(resp, sizeof(resp), "AUTH_OK:%d", db_id);
             send_line(sock, resp);
-            return uid;
+            return db_id;
         }
 
         send_line(sock, "AUTH_FAIL:tipo desconocido");
     }
 }
 
-/* ==========================================================================
-   HELPERS DE LOBBY
-   ========================================================================== */
+/* ============================================================
+   HELPERS DEL LOBBY
+   ============================================================ */
 
-int es_miembro(int user_id, int room_id) {
-    Room* r = &g_state->rooms[room_id - 1];
+   /* Busca ShmRoom por db_room_id. DEBE llamarse con lock tomado. */
+static ShmRoom* find_room(int db_room_id) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (g_state->rooms[i].active &&
+            g_state->rooms[i].db_room_id == db_room_id)
+            return &g_state->rooms[i];
+    }
+    return NULL;
+}
+
+static int es_miembro(int db_user_id, int db_room_id) {
+    ShmRoom* r = find_room(db_room_id);
+    if (!r) return 0;
     for (int i = 0; i < r->member_count; i++)
-        if (r->members[i] == user_id) return 1;
+        if (r->members[i] == db_user_id) return 1;
     return 0;
 }
 
-int es_coordinador(int user_id, int room_id) {
-    Room* r = &g_state->rooms[room_id - 1];
-    return r->coordinator_id == user_id;
+static int es_coordinador(int db_user_id, int db_room_id) {
+    ShmRoom* r = find_room(db_room_id);
+    if (!r) return 0;
+    return r->coordinator_id == db_user_id;
 }
 
-/* ??????????????????????????????????????????????????????????????????????????
-   LOGICA DEL LOBBY (corre en el hijo)
-   ?????????????????????????????????????????????????????????????????????????? */
+/* ============================================================
+   LOGICA DEL LOBBY (corre en el proceso hijo)
+   ============================================================ */
 
-void procesar_lobby(int sock, int user_id) {
+void procesar_lobby(int sock, int db_user_id) {
     char buf[BUFSIZE];
     char resp[BUFSIZE];
 
-    printf("[Hijo uid=%d] Entrando al lobby\n", user_id);
+    printf("[Hijo uid=%d] Entrando al lobby\n", db_user_id);
     send_line(sock, "LOBBY_OK:bienvenido al e-lobby");
 
     while (1) {
         int n = recv_line(sock, buf, sizeof(buf));
         if (n <= 0) {
-            printf("[Hijo uid=%d] Cliente desconectado\n", user_id);
+            printf("[Hijo uid=%d] Cliente desconectado\n", db_user_id);
             break;
         }
+        printf("[Hijo uid=%d] Recibido: %s\n", db_user_id, buf);
 
-        printf("[Hijo uid=%d] Recibido: %s\n", user_id, buf);
-
-        /* ?? LOBBY_LIST_USERS ??????????????????????????????????????? */
+        /* ── LOBBY_LIST_USERS ─────────────────────────────────── */
         if (strcmp(buf, "LOBBY_LIST_USERS") == 0) {
             pthread_mutex_lock(&g_state->lock);
             strcpy(resp, "USERS_LIST:");
             int first = 1;
             for (int i = 0; i < MAX_USERS; i++) {
-                if (g_state->users[i].active) {
-                    if (!first) strncat(resp, ",", sizeof(resp) - strlen(resp) - 1);
-                    char entry[128];
-                    snprintf(entry, sizeof(entry), "%d=%s",
-                        g_state->users[i].id,
-                        g_state->users[i].username);
-                    strncat(resp, entry, sizeof(resp) - strlen(resp) - 1);
-                    first = 0;
-                }
+                if (!g_state->users[i].active) continue;
+                if (!first) strncat(resp, ",", sizeof(resp) - strlen(resp) - 1);
+                char entry[128];
+                snprintf(entry, sizeof(entry), "%d=%s",
+                    g_state->users[i].db_user_id,
+                    g_state->users[i].username);
+                strncat(resp, entry, sizeof(resp) - strlen(resp) - 1);
+                first = 0;
             }
             pthread_mutex_unlock(&g_state->lock);
             send_line(sock, resp);
             continue;
         }
 
-        /* ?? LOBBY_LIST_ROOMS ??????????????????????????????????????? */
+        /* ── LOBBY_LIST_ROOMS ─────────────────────────────────── */
         if (strcmp(buf, "LOBBY_LIST_ROOMS") == 0) {
             pthread_mutex_lock(&g_state->lock);
             strcpy(resp, "ROOMS_LIST:");
             int first = 1;
             for (int i = 0; i < MAX_ROOMS; i++) {
-                if (g_state->rooms[i].active) {
-                    if (!first) strncat(resp, ",", sizeof(resp) - strlen(resp) - 1);
-                    char entry[128];
-                    snprintf(entry, sizeof(entry), "%d=%s(coord:%d,members:%d)",
-                        g_state->rooms[i].id,
-                        g_state->rooms[i].name,
-                        g_state->rooms[i].coordinator_id,
-                        g_state->rooms[i].member_count);
-                    strncat(resp, entry, sizeof(resp) - strlen(resp) - 1);
-                    first = 0;
-                }
+                if (!g_state->rooms[i].active) continue;
+                if (!first) strncat(resp, ",", sizeof(resp) - strlen(resp) - 1);
+                char entry[192];
+                snprintf(entry, sizeof(entry), "%d=%s(coord:%d,members:%d)",
+                    g_state->rooms[i].db_room_id,
+                    g_state->rooms[i].name,
+                    g_state->rooms[i].coordinator_id,
+                    g_state->rooms[i].member_count);
+                strncat(resp, entry, sizeof(resp) - strlen(resp) - 1);
+                first = 0;
             }
             pthread_mutex_unlock(&g_state->lock);
             send_line(sock, resp);
             continue;
         }
 
-        /* ?? LOBBY_CREATE_ROOM:nombre ??????????????????????????????? */
+        /* ── LOBBY_CREATE_ROOM:nombre ─────────────────────────── */
         if (strncmp(buf, "LOBBY_CREATE_ROOM:", 18) == 0) {
             const char* nombre = buf + 18;
             if (!strlen(nombre)) { send_line(sock, "ROOM_FAIL:nombre vacio"); continue; }
 
+            /* 1. Guardar en JSON */
+            ChatRoom cr = createChatRoom(nombre, db_user_id);
+            saveChatRoom(&cr);
+            int db_rid = cr.id;
+            freeChatRoom(&cr);
+
+            /* 2. Registrar en shared memory */
             pthread_mutex_lock(&g_state->lock);
             int slot = -1;
-            for (int i = 0; i < MAX_ROOMS; i++) {
+            for (int i = 0; i < MAX_ROOMS; i++)
                 if (!g_state->rooms[i].active) { slot = i; break; }
-            }
+
             if (slot == -1) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ROOM_FAIL:maximo de rooms alcanzado");
                 continue;
             }
-            Room* r = &g_state->rooms[slot];
-            memset(r, 0, sizeof(Room));
+            ShmRoom* r = &g_state->rooms[slot];
+            memset(r, 0, sizeof(ShmRoom));
             r->id = slot + 1;
+            r->db_room_id = db_rid;
             r->active = 1;
-            r->coordinator_id = user_id;
-            r->members[0] = user_id;
+            r->coordinator_id = db_user_id;
+            r->members[0] = db_user_id;
             r->member_count = 1;
             strncpy(r->name, nombre, sizeof(r->name) - 1);
-            int rid = r->id;
             g_state->room_count++;
-            pthread_mutex_unlock(&g_state->lock);
 
-            snprintf(resp, sizeof(resp), "ROOM_CREATED:%d", rid);
-            send_line(sock, resp);
-
-            /* Notificar a todos via UDP */
-            char notif[BUFSIZE];
-            snprintf(notif, sizeof(notif), "NOTIF_ROOM_CREATED:%d=%s", rid, nombre);
-            pthread_mutex_lock(&g_state->lock);
+            /* Recoger usuarios activos para notificar */
             int uids[MAX_USERS]; int uc = 0;
             for (int i = 0; i < MAX_USERS; i++)
-                if (g_state->users[i].active && g_state->users[i].id != user_id)
-                    uids[uc++] = g_state->users[i].id;
+                if (g_state->users[i].active &&
+                    g_state->users[i].db_user_id != db_user_id)
+                    uids[uc++] = g_state->users[i].db_user_id;
             pthread_mutex_unlock(&g_state->lock);
+
+            snprintf(resp, sizeof(resp), "ROOM_CREATED:%d", db_rid);
+            send_line(sock, resp);
+
+            char notif[BUFSIZE];
+            snprintf(notif, sizeof(notif), "NOTIF_ROOM_CREATED:%d=%s", db_rid, nombre);
             for (int i = 0; i < uc; i++) udp_notify(uids[i], notif);
             continue;
         }
 
-        /* ?? LOBBY_JOIN_REQUEST:room_id ????????????????????????????? */
-        if (strncmp(buf, "LOBBY_JOIN_REQUEST:", 19) == 0) {
-            int rid = atoi(buf + 19);
+        /* ── ROOM_MSG:room_id:texto  (NUEVO) ──────────────────── */
+        if (strncmp(buf, "ROOM_MSG:", 9) == 0) {
+            /* Parsear room_id y texto */
+            char* colon = strchr(buf + 9, ':');
+            if (!colon) { send_line(sock, "MSG_FAIL:formato incorrecto"); continue; }
+            *colon = '\0';
+            int   rid = atoi(buf + 9);
+            const char* texto = colon + 1;
+
+            if (!strlen(texto)) { send_line(sock, "MSG_FAIL:mensaje vacio"); continue; }
+
+            /* Verificar membresia */
             pthread_mutex_lock(&g_state->lock);
-            Room* r = NULL;
-            for (int i = 0; i < MAX_ROOMS; i++) {
-                if (g_state->rooms[i].active && g_state->rooms[i].id == rid) {
-                    r = &g_state->rooms[i];
+            int miembro = es_miembro(db_user_id, rid);
+            pthread_mutex_unlock(&g_state->lock);
+
+            if (!miembro) { send_line(sock, "MSG_FAIL:no eres miembro de esa sala"); continue; }
+
+            /* 1. Guardar mensaje en JSON */
+            Message msg = createMessage(texto, db_user_id, rid);
+            saveMessage(&msg);
+            int msg_id = msg.id;
+            freeMessage(&msg);
+
+            printf("[Hijo uid=%d] Mensaje guardado id=%d en sala %d\n",
+                db_user_id, msg_id, rid);
+
+            /* 2. Obtener username del remitente para la notificacion */
+            char sender_name[64] = "?";
+            pthread_mutex_lock(&g_state->lock);
+            for (int i = 0; i < MAX_USERS; i++) {
+                if (g_state->users[i].active &&
+                    g_state->users[i].db_user_id == db_user_id) {
+                    strncpy(sender_name, g_state->users[i].username,
+                        sizeof(sender_name) - 1);
                     break;
                 }
             }
-            if (!r) { pthread_mutex_unlock(&g_state->lock); send_line(sock, "ROOM_FAIL:room no existe"); continue; }
-            if (es_miembro(user_id, rid)) { pthread_mutex_unlock(&g_state->lock); send_line(sock, "ROOM_FAIL:ya eres miembro"); continue; }
-            if (r->pending_count >= MAX_PENDING) { pthread_mutex_unlock(&g_state->lock); send_line(sock, "ROOM_FAIL:cola llena"); continue; }
-            r->pending[r->pending_count++] = user_id;
+            pthread_mutex_unlock(&g_state->lock);
+
+            /* 3. Confirmar al remitente */
+            snprintf(resp, sizeof(resp), "MSG_OK:%d", msg_id);
+            send_line(sock, resp);
+
+            /* 4. Notificar a todos los miembros de la sala via UDP
+             *    Formato: NOTIF_NEW_MSG:room_id:msg_id:user_id=username:texto
+             */
+            char notif[BUFSIZE];
+            snprintf(notif, sizeof(notif),
+                "NOTIF_NEW_MSG:%d:%d:%d=%s:%s",
+                rid, msg_id, db_user_id, sender_name, texto);
+            udp_notify_room(rid, notif);
+            continue;
+        }
+
+        /* ── LOBBY_GET_MESSAGES:room_id  (historial) ─────────── */
+        if (strncmp(buf, "LOBBY_GET_MESSAGES:", 19) == 0) {
+            int rid = atoi(buf + 19);
+
+            /* Verificar membresia */
+            pthread_mutex_lock(&g_state->lock);
+            int miembro = es_miembro(db_user_id, rid);
+            pthread_mutex_unlock(&g_state->lock);
+
+            if (!miembro) { send_line(sock, "MSG_FAIL:no eres miembro de esa sala"); continue; }
+
+            /* Leer mensajes del JSON */
+            int count = 0;
+            Message* msgs = getMessagesFromChatRoom(rid, &count);
+
+            if (!msgs || count == 0) {
+                send_line(sock, "MESSAGES_LIST:");
+                if (msgs) freeMessages(msgs, count);
+                continue;
+            }
+
+            /* Construir respuesta:
+             * MESSAGES_LIST:msg_id:user_id:texto|msg_id:user_id:texto|...
+             */
+            strcpy(resp, "MESSAGES_LIST:");
+            for (int i = 0; i < count; i++) {
+                char entry[BUFSIZE];
+                snprintf(entry, sizeof(entry), "%d:%d:%s",
+                    msgs[i].id, msgs[i].userId, msgs[i].text);
+                strncat(resp, entry, sizeof(resp) - strlen(resp) - 1);
+                if (i < count - 1)
+                    strncat(resp, "|", sizeof(resp) - strlen(resp) - 1);
+            }
+            freeMessages(msgs, count);
+            send_line(sock, resp);
+            continue;
+        }
+
+        /* ── LOBBY_JOIN_REQUEST:room_id ───────────────────────── */
+        if (strncmp(buf, "LOBBY_JOIN_REQUEST:", 19) == 0) {
+            int rid = atoi(buf + 19);
+            pthread_mutex_lock(&g_state->lock);
+            ShmRoom* r = find_room(rid);
+            if (!r) {
+                pthread_mutex_unlock(&g_state->lock);
+                send_line(sock, "ROOM_FAIL:room no existe"); continue;
+            }
+            if (es_miembro(db_user_id, rid)) {
+                pthread_mutex_unlock(&g_state->lock);
+                send_line(sock, "ROOM_FAIL:ya eres miembro"); continue;
+            }
+            if (r->pending_count >= MAX_PENDING) {
+                pthread_mutex_unlock(&g_state->lock);
+                send_line(sock, "ROOM_FAIL:cola llena"); continue;
+            }
+            r->pending[r->pending_count++] = db_user_id;
             int coord_id = r->coordinator_id;
-            char uname[64];
+
+            char uname[64] = "?";
             for (int i = 0; i < MAX_USERS; i++)
-                if (g_state->users[i].id == user_id)
-                {
-                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1); break;
+                if (g_state->users[i].db_user_id == db_user_id) {
+                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1);
+                    break;
                 }
             pthread_mutex_unlock(&g_state->lock);
 
             send_line(sock, "REQUEST_PENDING");
 
-            /* Notificar al coordinador via UDP */
             char notif[BUFSIZE];
-            snprintf(notif, sizeof(notif), "NOTIF_JOIN_REQUEST:%d:%d=%s", rid, user_id, uname);
+            snprintf(notif, sizeof(notif), "NOTIF_JOIN_REQUEST:%d:%d=%s",
+                rid, db_user_id, uname);
             udp_notify(coord_id, notif);
             continue;
         }
 
-        /* ?? COORD_ACCEPT:room_id:user_id ?????????????????????????? */
+        /* ── COORD_ACCEPT:room_id:user_id ─────────────────────── */
         if (strncmp(buf, "COORD_ACCEPT:", 13) == 0) {
             int rid, target_uid;
             if (sscanf(buf + 13, "%d:%d", &rid, &target_uid) != 2) {
                 send_line(sock, "ACTION_FAIL:formato incorrecto"); continue;
             }
             pthread_mutex_lock(&g_state->lock);
-            if (!es_coordinador(user_id, rid)) {
+            if (!es_coordinador(db_user_id, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:no eres coordinador"); continue;
             }
-            Room* r = &g_state->rooms[rid - 1];
-            /* Quitar de pending */
+            ShmRoom* r = find_room(rid);
             int found = 0;
             for (int i = 0; i < r->pending_count; i++) {
                 if (r->pending[i] == target_uid) {
@@ -445,42 +600,46 @@ void procesar_lobby(int sock, int user_id) {
                     found = 1; break;
                 }
             }
-            if (!found) { pthread_mutex_unlock(&g_state->lock); send_line(sock, "ACTION_FAIL:solicitud no encontrada"); continue; }
-            /* Agregar a miembros */
+            if (!found) {
+                pthread_mutex_unlock(&g_state->lock);
+                send_line(sock, "ACTION_FAIL:solicitud no encontrada"); continue;
+            }
             r->members[r->member_count++] = target_uid;
+
             char uname[64] = "?";
             for (int i = 0; i < MAX_USERS; i++)
-                if (g_state->users[i].id == target_uid)
-                {
-                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1); break;
+                if (g_state->users[i].db_user_id == target_uid) {
+                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1);
+                    break;
                 }
             pthread_mutex_unlock(&g_state->lock);
 
+            /* Persistir relacion en JSON */
+            addUserToChatRoom(target_uid, rid);
+
             send_line(sock, "ACTION_OK");
 
-            /* Notificar al usuario aceptado */
             char notif[BUFSIZE];
             snprintf(notif, sizeof(notif), "NOTIF_ACCEPTED:%d", rid);
             udp_notify(target_uid, notif);
 
-            /* Notificar a todos en la room */
             snprintf(notif, sizeof(notif), "NOTIF_USER_JOINED:%d:%s", rid, uname);
             udp_notify_room(rid, notif);
             continue;
         }
 
-        /* ?? COORD_REJECT:room_id:user_id ?????????????????????????? */
+        /* ── COORD_REJECT:room_id:user_id ─────────────────────── */
         if (strncmp(buf, "COORD_REJECT:", 13) == 0) {
             int rid, target_uid;
             if (sscanf(buf + 13, "%d:%d", &rid, &target_uid) != 2) {
                 send_line(sock, "ACTION_FAIL:formato incorrecto"); continue;
             }
             pthread_mutex_lock(&g_state->lock);
-            if (!es_coordinador(user_id, rid)) {
+            if (!es_coordinador(db_user_id, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:no eres coordinador"); continue;
             }
-            Room* r = &g_state->rooms[rid - 1];
+            ShmRoom* r = find_room(rid);
             int found = 0;
             for (int i = 0; i < r->pending_count; i++) {
                 if (r->pending[i] == target_uid) {
@@ -499,18 +658,18 @@ void procesar_lobby(int sock, int user_id) {
             continue;
         }
 
-        /* ?? COORD_KICK:room_id:user_id ???????????????????????????? */
+        /* ── COORD_KICK:room_id:user_id ───────────────────────── */
         if (strncmp(buf, "COORD_KICK:", 11) == 0) {
             int rid, target_uid;
             if (sscanf(buf + 11, "%d:%d", &rid, &target_uid) != 2) {
                 send_line(sock, "ACTION_FAIL:formato incorrecto"); continue;
             }
             pthread_mutex_lock(&g_state->lock);
-            if (!es_coordinador(user_id, rid)) {
+            if (!es_coordinador(db_user_id, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:no eres coordinador"); continue;
             }
-            Room* r = &g_state->rooms[rid - 1];
+            ShmRoom* r = find_room(rid);
             int found = 0;
             for (int i = 0; i < r->member_count; i++) {
                 if (r->members[i] == target_uid) {
@@ -520,11 +679,15 @@ void procesar_lobby(int sock, int user_id) {
             }
             char uname[64] = "?";
             for (int i = 0; i < MAX_USERS; i++)
-                if (g_state->users[i].id == target_uid)
-                {
-                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1); break;
+                if (g_state->users[i].db_user_id == target_uid) {
+                    strncpy(uname, g_state->users[i].username, sizeof(uname) - 1);
+                    break;
                 }
             pthread_mutex_unlock(&g_state->lock);
+
+            /* No hay removeUserFromChatRoom en el repo, pero podemos
+             * simplemente no persistir el kick por ahora, o se puede
+             * implementar llamando a updateChatRoom directamente.      */
 
             send_line(sock, found ? "ACTION_OK" : "ACTION_FAIL:usuario no en la room");
             if (found) {
@@ -537,25 +700,29 @@ void procesar_lobby(int sock, int user_id) {
             continue;
         }
 
-        /* ?? COORD_INVITE:room_id:user_id ?????????????????????????? */
+        /* ── COORD_INVITE:room_id:user_id ─────────────────────── */
         if (strncmp(buf, "COORD_INVITE:", 13) == 0) {
             int rid, target_uid;
             if (sscanf(buf + 13, "%d:%d", &rid, &target_uid) != 2) {
                 send_line(sock, "ACTION_FAIL:formato incorrecto"); continue;
             }
             pthread_mutex_lock(&g_state->lock);
-            if (!es_coordinador(user_id, rid)) {
+            if (!es_coordinador(db_user_id, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:no eres coordinador"); continue;
             }
-            Room* r = &g_state->rooms[rid - 1];
             if (es_miembro(target_uid, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:ya es miembro"); continue;
             }
+            ShmRoom* r = find_room(rid);
             r->members[r->member_count++] = target_uid;
-            char rname[64]; strncpy(rname, r->name, sizeof(rname) - 1);
+            char rname[64];
+            strncpy(rname, r->name, sizeof(rname) - 1);
             pthread_mutex_unlock(&g_state->lock);
+
+            /* Persistir en JSON */
+            addUserToChatRoom(target_uid, rid);
 
             send_line(sock, "ACTION_OK");
             char notif[BUFSIZE];
@@ -564,44 +731,46 @@ void procesar_lobby(int sock, int user_id) {
             continue;
         }
 
-        /* ?? COORD_DELETE_ROOM:room_id ????????????????????????????? */
+        /* ── COORD_DELETE_ROOM:room_id ────────────────────────── */
         if (strncmp(buf, "COORD_DELETE_ROOM:", 18) == 0) {
             int rid = atoi(buf + 18);
             pthread_mutex_lock(&g_state->lock);
-            if (!es_coordinador(user_id, rid)) {
+            if (!es_coordinador(db_user_id, rid)) {
                 pthread_mutex_unlock(&g_state->lock);
                 send_line(sock, "ACTION_FAIL:no eres coordinador"); continue;
             }
-            Room* r = &g_state->rooms[rid - 1];
+            ShmRoom* r = find_room(rid);
+            if (!r) {
+                pthread_mutex_unlock(&g_state->lock);
+                send_line(sock, "ACTION_FAIL:sala no existe"); continue;
+            }
             if (r->member_count > 1) {
                 pthread_mutex_unlock(&g_state->lock);
-                send_line(sock, "ACTION_FAIL:la room no esta vacia");
-                continue;
+                send_line(sock, "ACTION_FAIL:la room no esta vacia"); continue;
             }
             r->active = 0;
+
+            int uids[MAX_USERS]; int uc = 0;
+            for (int i = 0; i < MAX_USERS; i++)
+                if (g_state->users[i].active)
+                    uids[uc++] = g_state->users[i].db_user_id;
             pthread_mutex_unlock(&g_state->lock);
 
             send_line(sock, "ACTION_OK");
             char notif[BUFSIZE];
             snprintf(notif, sizeof(notif), "NOTIF_ROOM_DELETED:%d", rid);
-            /* Notificar a todos */
-            pthread_mutex_lock(&g_state->lock);
-            int uids[MAX_USERS]; int uc = 0;
-            for (int i = 0; i < MAX_USERS; i++)
-                if (g_state->users[i].active)
-                    uids[uc++] = g_state->users[i].id;
-            pthread_mutex_unlock(&g_state->lock);
             for (int i = 0; i < uc; i++) udp_notify(uids[i], notif);
             continue;
         }
 
-        /* ?? LOBBY_SET_NICK:nickname ???????????????????????????????? */
+        /* ── LOBBY_SET_NICK:nickname ──────────────────────────── */
         if (strncmp(buf, "LOBBY_SET_NICK:", 15) == 0) {
             const char* nick = buf + 15;
             pthread_mutex_lock(&g_state->lock);
             for (int i = 0; i < MAX_USERS; i++) {
-                if (g_state->users[i].id == user_id) {
-                    strncpy(g_state->users[i].nickname, nick, sizeof(g_state->users[i].nickname) - 1);
+                if (g_state->users[i].db_user_id == db_user_id) {
+                    strncpy(g_state->users[i].nickname, nick,
+                        sizeof(g_state->users[i].nickname) - 1);
                     break;
                 }
             }
@@ -610,14 +779,14 @@ void procesar_lobby(int sock, int user_id) {
             continue;
         }
 
-        /* ?? Comando desconocido ???????????????????????????????????? */
+        /* ── Comando desconocido ──────────────────────────────── */
         send_line(sock, "ERR_UNKNOWN_CMD");
     }
 }
 
-/* ??????????????????????????????????????????????????????????????????????????
-   FUNCION DEL HIJO (corre despues del fork)
-   ?????????????????????????????????????????????????????????????????????????? */
+/* ============================================================
+   FUNCION DEL HIJO
+   ============================================================ */
 
 void atender_cliente(int sock, const char* client_ip) {
     char username[64] = "";
@@ -633,17 +802,16 @@ void atender_cliente(int sock, const char* client_ip) {
 
     procesar_lobby(sock, uid);
 
-    /* Limpiar shared memory al salir */
+    /* Limpiar shared memory */
     pthread_mutex_lock(&g_state->lock);
     for (int i = 0; i < MAX_USERS; i++) {
-        if (g_state->users[i].id == uid) {
+        if (g_state->users[i].db_user_id == uid) {
             g_state->users[i].active = 0;
             break;
         }
     }
-    /* Quitar de todas las rooms */
     for (int i = 0; i < MAX_ROOMS; i++) {
-        Room* r = &g_state->rooms[i];
+        ShmRoom* r = &g_state->rooms[i];
         if (!r->active) continue;
         for (int j = 0; j < r->member_count; j++) {
             if (r->members[j] == uid) {
@@ -651,17 +819,15 @@ void atender_cliente(int sock, const char* client_ip) {
             }
         }
     }
-    pthread_mutex_unlock(&g_state->lock);
 
-    /* Notificar desconexion */
-    char notif[BUFSIZE];
-    snprintf(notif, sizeof(notif), "NOTIF_USER_OFFLINE:%d=%s", uid, username);
-    pthread_mutex_lock(&g_state->lock);
     int uids[MAX_USERS]; int uc = 0;
     for (int i = 0; i < MAX_USERS; i++)
         if (g_state->users[i].active)
-            uids[uc++] = g_state->users[i].id;
+            uids[uc++] = g_state->users[i].db_user_id;
     pthread_mutex_unlock(&g_state->lock);
+
+    char notif[BUFSIZE];
+    snprintf(notif, sizeof(notif), "NOTIF_USER_OFFLINE:%d=%s", uid, username);
     for (int i = 0; i < uc; i++) udp_notify(uids[i], notif);
 
     close(sock);
@@ -669,12 +835,9 @@ void atender_cliente(int sock, const char* client_ip) {
     exit(0);
 }
 
-/* ??????????????????????????????????????????????????????????????????????????
-   HILO UDP � recoge notificaciones solicitadas por los hijos
-   (En esta version simple el padre las envia directamente via udp_notify)
-   El hilo UDP aqui solo sirve para recibir pings de hijos si usas un pipe.
-   Por simplicidad lo dejamos como un oyente que imprime lo que llega.
-   ?????????????????????????????????????????????????????????????????????????? */
+/* ============================================================
+   HILO UDP
+   ============================================================ */
 
 void* hilo_udp(void* arg) {
     (void)arg;
@@ -687,18 +850,15 @@ void* hilo_udp(void* arg) {
             (struct sockaddr*)&src, &slen);
         if (n > 0) {
             buf[n] = '\0';
-            /* En el diseno actual los hijos llaman udp_notify() directamente
-               usando el fd global g_udp_sd. Este hilo puede usarse en el futuro
-               para recibir mensajes de control de hijos via UDP. */
             printf("[UDP] Recibido: %s", buf);
         }
     }
     return NULL;
 }
 
-/* ??????????????????????????????????????????????????????????????????????????
+/* ============================================================
    SIGNAL HANDLERS
-   ?????????????????????????????????????????????????????????????????????????? */
+   ============================================================ */
 
 void sig_chld(int sig) {
     (void)sig;
@@ -713,26 +873,25 @@ void sig_int(int sig) {
     exit(0);
 }
 
-/* ??????????????????????????????????????????????????????????????????????????
+/* ============================================================
    MAIN
-   ?????????????????????????????????????????????????????????????????????????? */
+   ============================================================ */
 
 int main(void) {
-    /* ?? Shared memory ???????????????????????????????????????????????????? */
+    /* Shared memory */
     g_state = mmap(NULL, sizeof(SharedState),
         PROT_READ | PROT_WRITE,
         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (g_state == MAP_FAILED) { perror("mmap"); exit(1); }
     memset(g_state, 0, sizeof(SharedState));
 
-    /* Mutex compartido entre procesos */
     pthread_mutexattr_t mattr;
     pthread_mutexattr_init(&mattr);
     pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
     pthread_mutex_init(&g_state->lock, &mattr);
     pthread_mutexattr_destroy(&mattr);
 
-    /* ?? Socket UDP ??????????????????????????????????????????????????????? */
+    /* Socket UDP */
     g_udp_sd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_sd == -1) { perror("udp socket"); exit(1); }
     struct sockaddr_in udp_addr;
@@ -744,12 +903,11 @@ int main(void) {
         perror("udp bind"); exit(1);
     }
 
-    /* ?? Hilo UDP ????????????????????????????????????????????????????????? */
     pthread_t tid;
     pthread_create(&tid, NULL, hilo_udp, NULL);
     pthread_detach(tid);
 
-    /* ?? Socket TCP ??????????????????????????????????????????????????????? */
+    /* Socket TCP */
     g_tcp_sd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_tcp_sd == -1) { perror("tcp socket"); exit(1); }
     int opt = 1;
@@ -765,38 +923,31 @@ int main(void) {
     }
     if (listen(g_tcp_sd, 10) == -1) { perror("listen"); exit(1); }
 
-    /* ?? Signals ?????????????????????????????????????????????????????????? */
-    signal(SIGCHLD, sig_chld);   /* recoger zombies automaticamente */
+    signal(SIGCHLD, sig_chld);
     signal(SIGINT, sig_int);
 
-    printf("[Padre] Servidor listo � TCP:%d  UDP:%d\n", TCP_PORT, UDP_PORT);
+    printf("[Padre] Servidor listo - TCP:%d  UDP:%d\n", TCP_PORT, UDP_PORT);
 
-    /* ?? Loop principal: accept() + fork() ???????????????????????????????? */
+    /* Loop principal */
     while (1) {
         struct sockaddr_in client_addr;
         socklen_t clen = sizeof(client_addr);
         int client_fd = accept(g_tcp_sd, (struct sockaddr*)&client_addr, &clen);
-        if (client_fd == -1) {
-            perror("accept");
-            continue;
-        }
+        if (client_fd == -1) { perror("accept"); continue; }
 
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
-        printf("[Padre] Nueva conexion de %s � haciendo fork\n", client_ip);
+        printf("[Padre] Nueva conexion de %s\n", client_ip);
 
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); close(client_fd); continue; }
 
         if (pid == 0) {
-            /* ?? HIJO ?? */
-            close(g_tcp_sd);   /* hijo no necesita el socket de escucha */
+            close(g_tcp_sd);
             atender_cliente(client_fd, client_ip);
-            /* atender_cliente llama exit(), no llega aqui */
         }
 
-        /* ?? PADRE ?? */
-        close(client_fd);   /* padre cede el socket al hijo */
+        close(client_fd);
     }
 
     return 0;

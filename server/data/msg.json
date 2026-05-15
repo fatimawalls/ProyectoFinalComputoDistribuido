@@ -1,1 +1,11 @@
-[]
+[{
+		"id":	1,
+		"userId":	1,
+		"chatRoomId":	1,
+		"text":	"hola mundo"
+	}, {
+		"id":	2,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"Hola a todos"
+	}]

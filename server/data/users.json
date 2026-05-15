@@ -7,5 +7,5 @@
 		"id":	2,
 		"name":	"soto",
 		"password":	"soto",
-		"chatRoomsIds":	[2, 3]
+		"chatRoomsIds":	[2, 3, 4, 5, 6]
 	}]

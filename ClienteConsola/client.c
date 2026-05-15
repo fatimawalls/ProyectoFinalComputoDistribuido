@@ -4,7 +4,7 @@
  *   - Hilo principal: envia comandos al servidor (TCP)
  *   - Hilo UDP: escucha notificaciones push del servidor
  *
- * Compilar: cc client.c -lpthread -o client
+ * Compilar: gcc client.c -lpthread -o client
  * Ejecutar:  ./client <host>
  */
 
@@ -19,15 +19,15 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-/* ─── Constantes ─────────────────────────────────────────────────────────── */
+ /* ─── Constantes ─────────────────────────────────────────────────────────── */
 #define TCP_PORT   5000
 #define UDP_PORT   5001      /* puerto donde el SERVIDOR envia notificaciones */
 #define UDP_LOCAL  5100      /* puerto LOCAL donde este cliente escucha UDP   */
 #define BUFSIZE    1024
 
 /* ─── Estado del cliente ─────────────────────────────────────────────────── */
-static int  g_tcp_fd  = -1;
-static int  g_udp_fd  = -1;
+static int  g_tcp_fd = -1;
+static int  g_udp_fd = -1;
 static int  g_user_id = -1;
 static char g_username[64] = "";
 
@@ -35,7 +35,7 @@ static char g_username[64] = "";
    UTILIDADES DE RED
    ══════════════════════════════════════════════════════════════════════════ */
 
-int recv_line(int fd, char *buf, int maxlen) {
+int recv_line(int fd, char* buf, int maxlen) {
     int total = 0;
     char c;
     while (total < maxlen - 1) {
@@ -48,7 +48,7 @@ int recv_line(int fd, char *buf, int maxlen) {
     return total;
 }
 
-void send_line(int fd, const char *msg) {
+void send_line(int fd, const char* msg) {
     char buf[BUFSIZE];
     snprintf(buf, sizeof(buf), "%s\n", msg);
     send(fd, buf, strlen(buf), 0);
@@ -58,22 +58,84 @@ void send_line(int fd, const char *msg) {
    HILO UDP — escucha notificaciones push del servidor
    ══════════════════════════════════════════════════════════════════════════ */
 
-void *hilo_udp_listener(void *arg) {
+void* hilo_udp_listener(void* arg) {
     (void)arg;
     char buf[BUFSIZE];
     struct sockaddr_in src;
     socklen_t slen = sizeof(src);
 
     while (1) {
-        int n = recvfrom(g_udp_fd, buf, sizeof(buf)-1, 0,
-                         (struct sockaddr *)&src, &slen);
+        int n = recvfrom(g_udp_fd, buf, sizeof(buf) - 1, 0,
+            (struct sockaddr*)&src, &slen);
         if (n <= 0) break;
         buf[n] = '\0';
-        /* Quitar el \n si lo hay */
         buf[strcspn(buf, "\n")] = '\0';
 
-        /* Mostrar la notificacion de forma clara en consola */
-        printf("\n  [NOTIF] %s\n> ", buf);
+        /* Interpretar la notificacion y mostrarla de forma legible */
+        printf("\n");
+
+        if (strncmp(buf, "NOTIF_NEW_MSG:", 14) == 0) {
+            /* Formato: NOTIF_NEW_MSG:room_id:msg_id:user_id=username:texto */
+            int room_id, msg_id, user_id;
+            char username[64], texto[BUFSIZE];
+            if (sscanf(buf + 14, "%d:%d:%d=%63[^:]:%1023[^\n]",
+                &room_id, &msg_id, &user_id, username, texto) == 5) {
+                printf("  ╔══ Nuevo mensaje en sala %d ══\n", room_id);
+                printf("  ║  [%s]: %s\n", username, texto);
+                printf("  ╚══════════════════════════════\n");
+            }
+            else {
+                printf("  [NOTIF] %s\n", buf);
+            }
+
+        }
+        else if (strncmp(buf, "NOTIF_USER_JOINED:", 18) == 0) {
+            /* Formato: NOTIF_USER_JOINED:room_id:username */
+            printf("  >> Usuario entro a una sala: %s\n", buf + 18);
+
+        }
+        else if (strncmp(buf, "NOTIF_USER_LEFT:", 16) == 0) {
+            printf("  >> Usuario salio de una sala: %s\n", buf + 16);
+
+        }
+        else if (strncmp(buf, "NOTIF_USER_OFFLINE:", 19) == 0) {
+            printf("  >> Usuario desconectado: %s\n", buf + 19);
+
+        }
+        else if (strncmp(buf, "NOTIF_ROOM_CREATED:", 19) == 0) {
+            printf("  >> Nueva sala creada: %s\n", buf + 19);
+
+        }
+        else if (strncmp(buf, "NOTIF_ROOM_DELETED:", 19) == 0) {
+            printf("  >> Sala eliminada: %s\n", buf + 19);
+
+        }
+        else if (strncmp(buf, "NOTIF_ACCEPTED:", 15) == 0) {
+            printf("  >> Fuiste aceptado en la sala %s\n", buf + 15);
+
+        }
+        else if (strncmp(buf, "NOTIF_REJECTED:", 15) == 0) {
+            printf("  >> Tu solicitud fue rechazada en sala %s\n", buf + 15);
+
+        }
+        else if (strncmp(buf, "NOTIF_KICKED:", 13) == 0) {
+            printf("  >> Fuiste expulsado de la sala %s\n", buf + 13);
+
+        }
+        else if (strncmp(buf, "NOTIF_INVITED:", 14) == 0) {
+            printf("  >> Fuiste invitado a la sala: %s\n", buf + 14);
+
+        }
+        else if (strncmp(buf, "NOTIF_JOIN_REQUEST:", 19) == 0) {
+            /* Formato: NOTIF_JOIN_REQUEST:room_id:user_id=username */
+            printf("  >> Solicitud de ingreso en sala: %s\n", buf + 19);
+
+        }
+        else {
+            printf("  [NOTIF] %s\n", buf);
+        }
+
+        printf("> ");
         fflush(stdout);
     }
     return NULL;
@@ -83,16 +145,9 @@ void *hilo_udp_listener(void *arg) {
    AUTENTICACION
    ══════════════════════════════════════════════════════════════════════════ */
 
-/*
- * Protocolo:
- *   Server -> "AUTH_REQUERIDA"
- *   Client -> "LOGIN:user:pass:udp_port"  o  "REGISTRO:user:pass"
- *   Server -> "AUTH_OK:uid"  /  "AUTH_FAIL:razon"  /  "REGISTRO_OK"
- */
 int hacer_auth(void) {
     char buf[BUFSIZE];
 
-    /* Esperar AUTH_REQUERIDA */
     if (recv_line(g_tcp_fd, buf, sizeof(buf)) <= 0) {
         printf("Error: servidor cerro la conexion\n"); return 0;
     }
@@ -129,9 +184,11 @@ int hacer_auth(void) {
         char msg[BUFSIZE];
         if (strcmp(opcion, "1") == 0) {
             snprintf(msg, sizeof(msg), "LOGIN:%s:%s:%d", user, pass, UDP_LOCAL);
-        } else if (strcmp(opcion, "2") == 0) {
+        }
+        else if (strcmp(opcion, "2") == 0) {
             snprintf(msg, sizeof(msg), "REGISTRO:%s:%s", user, pass);
-        } else {
+        }
+        else {
             printf("Opcion invalida\n"); continue;
         }
 
@@ -168,21 +225,23 @@ int hacer_auth(void) {
    ══════════════════════════════════════════════════════════════════════════ */
 
 void imprimir_menu_lobby(void) {
-    printf("\n╔══════════════════════════════╗\n");
-    printf("║         E-LOBBY              ║\n");
-    printf("╠══════════════════════════════╣\n");
-    printf("║  1) Ver usuarios activos     ║\n");
-    printf("║  2) Ver chatrooms            ║\n");
-    printf("║  3) Crear chatroom           ║\n");
-    printf("║  4) Solicitar unirme a room  ║\n");
-    printf("║  5) [COORD] Aceptar usuario  ║\n");
-    printf("║  6) [COORD] Rechazar usuario ║\n");
-    printf("║  7) [COORD] Expulsar usuario ║\n");
-    printf("║  8) [COORD] Invitar usuario  ║\n");
-    printf("║  9) [COORD] Borrar room      ║\n");
-    printf("║  n) Cambiar nickname         ║\n");
-    printf("║  0) Salir                    ║\n");
-    printf("╚══════════════════════════════╝\n");
+    printf("\n╔══════════════════════════════════╗\n");
+    printf("║           E-LOBBY                ║\n");
+    printf("╠══════════════════════════════════╣\n");
+    printf("║  1) Ver usuarios activos         ║\n");
+    printf("║  2) Ver chatrooms                ║\n");
+    printf("║  3) Crear chatroom               ║\n");
+    printf("║  4) Solicitar unirme a room      ║\n");
+    printf("║  m) Mandar mensaje a room        ║\n");  /* NUEVO */
+    printf("║  h) Ver historial de room        ║\n");  /* NUEVO */
+    printf("║  5) [COORD] Aceptar usuario      ║\n");
+    printf("║  6) [COORD] Rechazar usuario     ║\n");
+    printf("║  7) [COORD] Expulsar usuario     ║\n");
+    printf("║  8) [COORD] Invitar usuario      ║\n");
+    printf("║  9) [COORD] Borrar room          ║\n");
+    printf("║  n) Cambiar nickname             ║\n");
+    printf("║  0) Salir                        ║\n");
+    printf("╚══════════════════════════════════╝\n");
     printf("> ");
     fflush(stdout);
 }
@@ -192,6 +251,102 @@ void recibir_y_mostrar(void) {
     if (recv_line(g_tcp_fd, resp, sizeof(resp)) > 0)
         printf("  Servidor: %s\n", resp);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MANDAR MENSAJE A UNA ROOM
+   ══════════════════════════════════════════════════════════════════════════ */
+
+void mandar_mensaje(void) {
+    char input[128];
+    char cmd[BUFSIZE];
+    char resp[BUFSIZE];
+
+    printf("ID de la sala: ");
+    if (!fgets(input, sizeof(input), stdin)) return;
+    input[strcspn(input, "\n")] = '\0';
+    char room_id[16];
+    strncpy(room_id, input, sizeof(room_id) - 1);
+
+    printf("Mensaje: ");
+    if (!fgets(input, sizeof(input), stdin)) return;
+    input[strcspn(input, "\n")] = '\0';
+
+    if (!strlen(input)) {
+        printf("  Mensaje vacio, cancelado.\n");
+        return;
+    }
+
+    /* Formato: ROOM_MSG:room_id:texto */
+    snprintf(cmd, sizeof(cmd), "ROOM_MSG:%s:%s", room_id, input);
+    send_line(g_tcp_fd, cmd);
+
+    if (recv_line(g_tcp_fd, resp, sizeof(resp)) > 0) {
+        if (strncmp(resp, "MSG_OK:", 7) == 0) {
+            printf("  Mensaje enviado (ID: %s)\n", resp + 7);
+        }
+        else {
+            printf("  Error: %s\n", resp);
+        }
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   VER HISTORIAL DE UNA ROOM
+   ══════════════════════════════════════════════════════════════════════════ */
+
+void ver_historial(void) {
+    char input[128];
+    char cmd[BUFSIZE];
+    char resp[BUFSIZE];
+
+    printf("ID de la sala: ");
+    if (!fgets(input, sizeof(input), stdin)) return;
+    input[strcspn(input, "\n")] = '\0';
+
+    /* Formato: LOBBY_GET_MESSAGES:room_id */
+    snprintf(cmd, sizeof(cmd), "LOBBY_GET_MESSAGES:%s", input);
+    send_line(g_tcp_fd, cmd);
+
+    if (recv_line(g_tcp_fd, resp, sizeof(resp)) <= 0) return;
+
+    if (strncmp(resp, "MSG_FAIL:", 9) == 0) {
+        printf("  Error: %s\n", resp + 9);
+        return;
+    }
+
+    if (strcmp(resp, "MESSAGES_LIST:") == 0) {
+        printf("  No hay mensajes en esta sala.\n");
+        return;
+    }
+
+    /* Formato recibido: MESSAGES_LIST:msg_id:user_id:texto|msg_id:user_id:texto|... */
+    printf("\n  ╔══════════ Historial ══════════╗\n");
+
+    char* lista = resp + 14; /* saltar "MESSAGES_LIST:" */
+    char* token = strtok(lista, "|");
+    int count = 1;
+
+    while (token != NULL) {
+        int msg_id, user_id;
+        char texto[BUFSIZE];
+
+        /* Parsear msg_id:user_id:texto */
+        if (sscanf(token, "%d:%d:%1023[^\n]", &msg_id, &user_id, texto) == 3) {
+            printf("  ║  #%-3d [user:%d]: %s\n", count, user_id, texto);
+        }
+        else {
+            printf("  ║  %s\n", token);
+        }
+        count++;
+        token = strtok(NULL, "|");
+    }
+
+    printf("  ╚══════════════════════════════╝\n");
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LOOP PRINCIPAL DEL LOBBY
+   ══════════════════════════════════════════════════════════════════════════ */
 
 void lobby_loop(void) {
     char buf[BUFSIZE];
@@ -241,6 +396,18 @@ void lobby_loop(void) {
             snprintf(cmd, sizeof(cmd), "LOBBY_JOIN_REQUEST:%s", input);
             send_line(g_tcp_fd, cmd);
             recibir_y_mostrar();
+            continue;
+        }
+
+        /* ── Mandar mensaje (NUEVO) ────────────────────────────────── */
+        if (strcmp(input, "m") == 0) {
+            mandar_mensaje();
+            continue;
+        }
+
+        /* ── Ver historial (NUEVO) ─────────────────────────────────── */
+        if (strcmp(input, "h") == 0) {
+            ver_historial();
             continue;
         }
 
@@ -344,34 +511,34 @@ void lobby_loop(void) {
    MAIN
    ══════════════════════════════════════════════════════════════════════════ */
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Uso: %s <host>\n", argv[0]);
         exit(1);
     }
-    const char *host = argv[1];
+    const char* host = argv[1];
 
-    /* ── Socket UDP local (escucha notificaciones) ───────────────────────── */
+    /* Socket UDP local (escucha notificaciones) */
     g_udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_fd == -1) { perror("udp socket"); exit(1); }
     struct sockaddr_in udp_local;
     memset(&udp_local, 0, sizeof(udp_local));
-    udp_local.sin_family      = AF_INET;
+    udp_local.sin_family = AF_INET;
     udp_local.sin_addr.s_addr = INADDR_ANY;
-    udp_local.sin_port        = htons(UDP_LOCAL);
-    if (bind(g_udp_fd, (struct sockaddr *)&udp_local, sizeof(udp_local)) == -1) {
+    udp_local.sin_port = htons(UDP_LOCAL);
+    if (bind(g_udp_fd, (struct sockaddr*)&udp_local, sizeof(udp_local)) == -1) {
         perror("udp bind");
-        fprintf(stderr, "Nota: cambia UDP_LOCAL si el puerto %d esta en uso\n", UDP_LOCAL);
+        fprintf(stderr, "Cambia UDP_LOCAL si el puerto %d esta en uso\n", UDP_LOCAL);
         exit(1);
     }
 
-    /* ── Hilo UDP ────────────────────────────────────────────────────────── */
+    /* Hilo UDP */
     pthread_t tid;
     pthread_create(&tid, NULL, hilo_udp_listener, NULL);
     pthread_detach(tid);
 
-    /* ── Conexion TCP ────────────────────────────────────────────────────── */
-    struct hostent *he = gethostbyname(host);
+    /* Conexion TCP */
+    struct hostent* he = gethostbyname(host);
     if (!he) { fprintf(stderr, "Host no encontrado: %s\n", host); exit(1); }
 
     g_tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -380,16 +547,16 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in srv;
     memset(&srv, 0, sizeof(srv));
     srv.sin_family = AF_INET;
-    srv.sin_port   = htons(TCP_PORT);
+    srv.sin_port = htons(TCP_PORT);
     memcpy(&srv.sin_addr, he->h_addr, he->h_length);
 
-    if (connect(g_tcp_fd, (struct sockaddr *)&srv, sizeof(srv)) == -1) {
+    if (connect(g_tcp_fd, (struct sockaddr*)&srv, sizeof(srv)) == -1) {
         perror("connect"); exit(1);
     }
     printf("Conectado a %s:%d\n", host, TCP_PORT);
     printf("Notificaciones UDP en puerto local %d\n", UDP_LOCAL);
 
-    /* ── Auth ────────────────────────────────────────────────────────────── */
+    /* Auth */
     if (!hacer_auth()) {
         printf("Saliendo.\n");
         close(g_tcp_fd);
@@ -397,7 +564,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* ── Lobby ───────────────────────────────────────────────────────────── */
+    /* Lobby */
     lobby_loop();
 
     close(g_tcp_fd);

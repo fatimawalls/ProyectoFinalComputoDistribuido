@@ -13,6 +13,8 @@
 
 User *getUserById(int id);
 
+int loginUser(const char *name, const char *password);
+
 ChatRoom *getChatRoomById(int id);
 
 Message *getMessageById(int id);

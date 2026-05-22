@@ -1,0 +1,404 @@
+AUTH--------------------------------------
+Request***********
+{
+  "type": "AUTH",
+  "username": "carlos",
+  "password": "1234"
+}
+Response SUCCESS
+{
+  "type": "AUTH_RESPONSE",
+  "success": 1,
+  "userId": 1,
+  "username": "carlos"
+}
+
+STREAMING DE OBJETOS
+    SYNC_START
+    CHATROOM
+    CHATROOM
+    CHAT_USER
+    MESSAGE
+    MESSAGE
+    SYNC_END
+Luego mandar carga de datos
+{
+  "type": "SYNC_START"
+}
+CHATROOM
+{
+  "type":"CHATROOM",
+  "id":1,
+  "name":"General",
+  "coordinatorId":1,
+  "userIds":[1,2,3]
+}
+USER_IN_CHAT
+{
+  "type": "CHAT_USER",
+  "id": 2,
+  "name": "juan"
+}
+MESSAGE
+{
+  "type": "MESSAGE",
+  "id": 10,
+  "userId": 2,
+  "chatRoomId": 1,
+  "text": "hola"
+}
+FIN
+{
+  "type": "SYNC_END"
+}
+AUTH FAILED
+{
+  "type": "AUTH_RESPONSE",
+  "success": 0
+}
+
+
+CREATE_ACCOUNT--------------------------
+Request***********************
+{
+  "type": "CREATE_ACCOUNT",
+  "username": "carlos",
+  "password": "1234"
+}
+Response
+{
+  "type": "CREATE_ACCOUNT_RESPONSE",
+  "success": 1,
+  "id": 5,
+  "username": "carlos"
+}
+
+
+NEW_MESSAGE-----------------------------
+REQUEST**********************
+{
+  "type": "NEW_MESSAGE",
+  "text": "hola",
+  "userId": 1,
+  "chatRoomId": 2
+}
+RESPONSE
+{
+  "type": "NEW_MESSAGE_RESPONSE",
+  "success": 1,
+
+  "message":
+  {
+    "id": 10,
+    "text": "hola",
+    "userId": 1,
+    "chatRoomId": 2
+  },
+
+  "notifyUsers":
+  [1,2,3]
+}
+
+
+NEW_CHATROOM--------------------------
+REQUEST***************
+{
+  "type": "NEW_CHATROOM",
+  "name": "Proyecto",
+  "coordinatorId": 1
+}
+RESPONSE
+{
+  "type": "NEW_CHATROOM_RESPONSE",
+  "success": 1,
+
+  "chatRoom":
+  {
+    "id": 5,
+    "name": "Proyecto",
+    "coordinatorId": 1
+  },
+
+  "notifyUsers":
+  [1]
+}
+
+
+ADD_USER------------------------
+REQUEST**********
+{
+    "type":"ADD_USER",
+    "chatRoomId":1,
+    "userId":2
+}
+RESPONSE
+{
+  "type":"ADD_USER_RESPONSE",
+  "success":1,
+  "chatRoomId":1,
+  "userId":2,
+  "notifyUsers":[1,2,3]
+}
+
+
+REMOVE_USER--------------------------
+REQUEST*****************
+{
+    "type":"REMOVE_USER",
+    "chatRoomId":1,
+    "userId":2
+}
+RESPONSE
+{
+  "type":"REMOVE_USER_RESPONSE",
+  "success":1,
+  "chatRoomId":1,
+  "userId":2,
+  "notifyUsers":[1,2,3]
+}
+
+
+DELETE_MESSAGE-------------------------
+REQUEST*************
+{"type":"DELETE_MESSAGE","messageId":5}
+RESPONSE
+{
+  "type":"DELETE_MESSAGE_RESPONSE",
+  "success":1,
+  "messageId":5,
+  "notifyUsers":[1,2,3]
+}
+
+
+DELETE_CHATROOM--------------------------
+REQUEST****************
+{"type":"DELETE_CHATROOM","chatRoomId":2}
+RESPONSE
+{
+  "type":"DELETE_CHATROOM_RESPONSE",
+  "success":1,
+  "chatRoomId":2,
+  "notifyUsers":[1]
+}
+
+
+
+
+
+
+
+
+
+EJEMPLOS----------------------------------------------------------
+
+==============================
+REQUEST:
+{"type":"CREATE_ACCOUNT","username":"juan","password":"1234"}
+
+RESPONSE:
+{"type":"CREATE_ACCOUNT_RESPONSE","success":1,"userId":3,"username":"juan"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"CREATE_ACCOUNT","username":"carlos","password":"1234"}
+
+RESPONSE:
+{"type":"CREATE_ACCOUNT_RESPONSE","success":1,"userId":4,"username":"carlos"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"CREATE_ACCOUNT","username":"ana","password":"1234"}
+
+RESPONSE:
+{"type":"CREATE_ACCOUNT_RESPONSE","success":1,"userId":5,"username":"ana"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"AUTH","username":"juan","password":"1234"}
+
+RESPONSE:
+{"type":"AUTH_RESPONSE","success":1,"userId":1,"username":"juan"}
+{"type":"SYNC_START"}
+{"type":"CHATROOM","id":1,"name":"general","coordinatorId":1,"userIds":[1]}
+{"type":"CHAT_USER","id":1,"name":"juan"}
+{"type":"MESSAGE","id":1,"userId":1,"chatRoomId":1,"text":"hola mundo"}
+{"type":"SYNC_END"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"AUTH","username":"carlos","password":"wrong"}
+
+RESPONSE:
+{"type":"AUTH_RESPONSE","success":0}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_CHATROOM","name":"General","coordinatorId":1}
+
+RESPONSE:
+{"type":"NEW_CHATROOM_RESPONSE","success":1,"chatRoom":{"id":7,"name":"General","coordinatorId":1},"notifyUsers":[1]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_CHATROOM","name":"Tareas","coordinatorId":2}
+
+RESPONSE:
+{"type":"NEW_CHATROOM_RESPONSE","success":1,"chatRoom":{"id":8,"name":"Tareas","coordinatorId":2},"notifyUsers":[2]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"ADD_USER","chatRoomId":1,"userId":2}
+
+RESPONSE:
+{"type":"ADD_USER_RESPONSE","success":1,"userId":2,"chatRoomId":1,"notifyUsers":[1,2]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"ADD_USER","chatRoomId":1,"userId":3}
+
+RESPONSE:
+{"type":"ADD_USER_RESPONSE","success":1,"userId":3,"chatRoomId":1,"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"ADD_USER","chatRoomId":2,"userId":1}
+
+RESPONSE:
+{"type":"ADD_USER_RESPONSE","success":1,"userId":1,"chatRoomId":2,"notifyUsers":[2,1]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_MESSAGE","text":"Hola desde Juan","userId":1,"chatRoomId":1}
+
+RESPONSE:
+{"type":"NEW_MESSAGE_RESPONSE","success":1,"message":{"id":4,"text":"Hola desde Juan","userId":1,"chatRoomId":1},"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_MESSAGE","text":"Hola soy Carlos","userId":2,"chatRoomId":1}
+
+RESPONSE:
+{"type":"NEW_MESSAGE_RESPONSE","success":1,"message":{"id":5,"text":"Hola soy Carlos","userId":2,"chatRoomId":1},"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_MESSAGE","text":"Ana entrando al chat","userId":3,"chatRoomId":1}
+
+RESPONSE:
+{"type":"NEW_MESSAGE_RESPONSE","success":1,"message":{"id":6,"text":"Ana entrando al chat","userId":3,"chatRoomId":1},"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"NEW_MESSAGE","text":"Mensaje en Tareas","userId":2,"chatRoomId":2}
+
+RESPONSE:
+{"type":"NEW_MESSAGE_RESPONSE","success":1,"message":{"id":7,"text":"Mensaje en Tareas","userId":2,"chatRoomId":2},"notifyUsers":[2,1]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"AUTH","username":"juan","password":"1234"}
+
+RESPONSE:
+{"type":"AUTH_RESPONSE","success":1,"userId":1,"username":"juan"}
+{"type":"SYNC_START"}
+{"type":"CHATROOM","id":1,"name":"general","coordinatorId":1,"userIds":[1,2,3]}
+{"type":"CHAT_USER","id":1,"name":"juan"}
+{"type":"CHAT_USER","id":2,"name":"soto"}
+{"type":"CHAT_USER","id":3,"name":"juan"}
+{"type":"MESSAGE","id":1,"userId":1,"chatRoomId":1,"text":"hola mundo"}
+{"type":"MESSAGE","id":4,"userId":1,"chatRoomId":1,"text":"Hola desde Juan"}
+{"type":"MESSAGE","id":5,"userId":2,"chatRoomId":1,"text":"Hola soy Carlos"}
+{"type":"MESSAGE","id":6,"userId":3,"chatRoomId":1,"text":"Ana entrando al chat"}
+{"type":"CHATROOM","id":7,"name":"General","coordinatorId":1,"userIds":[1]}
+{"type":"CHAT_USER","id":1,"name":"juan"}
+{"type":"CHATROOM","id":2,"name":"general","coordinatorId":2,"userIds":[2,1]}
+{"type":"CHAT_USER","id":2,"name":"soto"}
+{"type":"CHAT_USER","id":1,"name":"juan"}
+{"type":"MESSAGE","id":7,"userId":2,"chatRoomId":2,"text":"Mensaje en Tareas"}
+{"type":"SYNC_END"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"AUTH","username":"ana","password":"1234"}
+
+RESPONSE:
+{"type":"AUTH_RESPONSE","success":1,"userId":5,"username":"ana"}
+{"type":"SYNC_START"}
+{"type":"SYNC_END"}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"DELETE_MESSAGE","messageId":1}
+
+RESPONSE:
+{"type":"DELETE_MESSAGE_RESPONSE","success":1,"messageId":1,"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"REMOVE_USER","chatRoomId":1,"userId":3}
+
+RESPONSE:
+{"type":"REMOVE_USER_RESPONSE","success":1,"userId":3,"chatRoomId":1,"notifyUsers":[1,2,3]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"DELETE_CHATROOM","chatRoomId":2}
+
+RESPONSE:
+{"type":"DELETE_CHATROOM_RESPONSE","success":0,"chatRoomId":2,"notifyUsers":[]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"REMOVE_USER","chatRoomId":2,"userId":1}
+
+RESPONSE:
+{"type":"REMOVE_USER_RESPONSE","success":1,"userId":1,"chatRoomId":2,"notifyUsers":[2,1]}
+
+==============================
+
+==============================
+REQUEST:
+{"type":"DELETE_CHATROOM","chatRoomId":2}
+
+RESPONSE:
+{"type":"DELETE_CHATROOM_RESPONSE","success":1,"chatRoomId":2,"notifyUsers":[2]}
+
+==============================

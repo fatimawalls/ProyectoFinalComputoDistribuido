@@ -70,9 +70,11 @@ void sendUserChatRelationResponse(
     int success,
     int userId,
     int chatRoomId,
+    User *chatUser,
     int *notifyUsers,
     int notifyCount
 );
+
 void sendDeleteResponse(
     int clientSocket,
     const char *responseType,

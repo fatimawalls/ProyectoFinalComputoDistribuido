@@ -456,6 +456,7 @@ void sendUserChatRelationResponse(
     int success,
     int userId,
     int chatRoomId,
+    User *chatUser,
     int *notifyUsers,
     int notifyCount
 )
@@ -486,17 +487,49 @@ void sendUserChatRelationResponse(
         chatRoomId
     );
 
-    cJSON *users = cJSON_CreateArray();
+    /*
+        Added user info
+    */
 
-    if(success)
+    if(chatUser != NULL)
     {
-        for(int i = 0; i < notifyCount; i++)
-        {
-            cJSON_AddItemToArray(
-                users,
-                cJSON_CreateNumber(notifyUsers[i])
-            );
-        }
+        cJSON *user =
+            cJSON_CreateObject();
+
+        cJSON_AddNumberToObject(
+            user,
+            "id",
+            chatUser->id
+        );
+
+        cJSON_AddStringToObject(
+            user,
+            "username",
+            chatUser->name
+        );
+
+        cJSON_AddItemToObject(
+            json,
+            "chatUser",
+            user
+        );
+    }
+
+    /*
+        Notify users
+    */
+
+    cJSON *users =
+        cJSON_CreateArray();
+
+    for(int i=0;i<notifyCount;i++)
+    {
+        cJSON_AddItemToArray(
+            users,
+            cJSON_CreateNumber(
+                notifyUsers[i]
+            )
+        );
     }
 
     cJSON_AddItemToObject(
@@ -505,7 +538,10 @@ void sendUserChatRelationResponse(
         users
     );
 
-    sendJson(clientSocket, json);
+    sendJson(
+        clientSocket,
+        json
+    );
 
     cJSON_Delete(json);
 }

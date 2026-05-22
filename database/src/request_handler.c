@@ -288,11 +288,15 @@ void handleAddUser(
             userId,
             chatRoomId,
             NULL,
+            NULL,
             0
         );
 
         return;
     }
+
+    User *addedUser =
+    getUserById(userId);
 
     sendUserChatRelationResponse(
         clientSocket,
@@ -300,9 +304,16 @@ void handleAddUser(
         success,
         userId,
         chatRoomId,
+        addedUser,
         room->userIds,
         room->userCount
     );
+
+    if(addedUser)
+    {
+        freeUser(addedUser);
+        free(addedUser);
+    }
 
     freeChatRoom(room);
     free(room);
@@ -359,6 +370,7 @@ void handleRemoveUser(
         success,
         userId,
         chatRoomId,
+        NULL,
         notifyUsers,
         notifyCount
     );

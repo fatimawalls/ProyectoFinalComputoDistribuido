@@ -133,11 +133,16 @@ REQUEST**********
 }
 RESPONSE
 {
-  "type":"ADD_USER_RESPONSE",
-  "success":1,
-  "chatRoomId":1,
-  "userId":2,
-  "notifyUsers":[1,2,3]
+    "type":"ADD_USER_RESPONSE",
+    "success":1,
+    "chatRoomId":1,
+    "userId":2,
+    "chatUser":
+    {
+        "id":2,
+        "username":"Carlos"
+    },
+    "notifyUsers":[1,2,3]
 }
 
 
@@ -190,6 +195,7 @@ RESPONSE
 
 
 EJEMPLOS----------------------------------------------------------
+
 
 ==============================
 REQUEST:
@@ -264,7 +270,7 @@ REQUEST:
 {"type":"ADD_USER","chatRoomId":1,"userId":2}
 
 RESPONSE:
-{"type":"ADD_USER_RESPONSE","success":1,"userId":2,"chatRoomId":1,"notifyUsers":[1,2]}
+{"type":"ADD_USER_RESPONSE","success":1,"userId":2,"chatRoomId":1,"chatUser":{"id":2,"username":"soto"},"notifyUsers":[1,2]}
 
 ==============================
 
@@ -273,7 +279,7 @@ REQUEST:
 {"type":"ADD_USER","chatRoomId":1,"userId":3}
 
 RESPONSE:
-{"type":"ADD_USER_RESPONSE","success":1,"userId":3,"chatRoomId":1,"notifyUsers":[1,2,3]}
+{"type":"ADD_USER_RESPONSE","success":1,"userId":3,"chatRoomId":1,"chatUser":{"id":3,"username":"juan"},"notifyUsers":[1,2,3]}
 
 ==============================
 
@@ -282,7 +288,7 @@ REQUEST:
 {"type":"ADD_USER","chatRoomId":2,"userId":1}
 
 RESPONSE:
-{"type":"ADD_USER_RESPONSE","success":1,"userId":1,"chatRoomId":2,"notifyUsers":[2,1]}
+{"type":"ADD_USER_RESPONSE","success":1,"userId":1,"chatRoomId":2,"chatUser":{"id":1,"username":"juan"},"notifyUsers":[2,1]}
 
 ==============================
 

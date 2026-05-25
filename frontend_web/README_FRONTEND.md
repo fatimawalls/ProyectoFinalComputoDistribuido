@@ -1,1 +1,64 @@
-MANUAL DE INTEGRACIÓN: BACKEND (C) Y FRONTENDS (PYTHON/WEB)Este documento define cómo deben comunicarse los desarrolladores de las tres áreas para que el sistema de chat funcione correctamente.1. PARÁMETROS DE RED (Las Coordenadas)Para que los programas se encuentren en la red, deben usar estos valores exactos:Dirección IP: 127.0.0.1 (Localhost para pruebas en la misma PC).Puerto del Servidor C (Principal): 5000 (Donde el Backend escucha a todos).Puerto del Web Server (Flask): 5100 (Donde el usuario abre el navegador).Protocolo de Transporte: TCP Sockets (Flujo de bytes).2. ORDEN DE EJECUCIÓN (¡Muy Importante!)Si no se sigue este orden, los programas darán error de conexión:Primero el Backend (C): Se debe compilar y ejecutar el servidor en C. Debe estar en estado listen (escucha) en el puerto 5000.Segundo la Pasarela Web (web_server.py): Al arrancar, el servidor Flask intentará conectarse al servidor C. Si C no está encendido, Flask fallará.Tercero los Clientes: Ya puedes abrir la aplicación de escritorio o entrar a http://localhost:5100 en tu navegador.3. ESPECIFICACIÓN DEL PROTOCOLO (Cómo hablar)Tanto C como Python deben enviar y recibir mensajes siguiendo esta estructura de texto:Formato: COMANDO|ARGUMENTO1|ARGUMENTO2|...|ARGUMENTON\nReglas de Oro:El Terminador (\n): Cada mensaje DEBE terminar con un salto de línea. Sin el \n, el receptor no sabrá que el mensaje ha terminado y se quedará esperando para siempre (bloqueado).El Separador (|): Se usa para dividir el comando de los datos.Sanitización: Antes de enviar un mensaje, el frontend debe borrar cualquier | o \n que el usuario haya escrito en el chat para no romper la trama.4. DICCIONARIO DE COMANDOS (Lo que se dicen)ComandoEmisorPropósitoEjemplo de TramaREQ_LOGINFrontendPide entrar al sistema`REQ_LOGINRES_LOGIN_OKBackendPermite el acceso`RES_LOGIN_OKREQ_CHAT_MSGFrontendEnvía un mensaje a una sala`REQ_CHAT_MSGEVT_NEW_MSGBackendRetransmite mensaje a otros`EVT_NEW_MSGEVT_USER_JOINEDBackendAvisa que alguien entró`EVT_USER_JOINED5. GUÍA PARA EL DESARROLLADOR DE BACKEND (C)Para hablar con el frontend, tu código en C debe:Recibir: Usar recv() y acumular en un buffer hasta detectar el \n.Procesar: Usar strtok() con el delimitador | para separar el comando de los argumentos.Responder: Usar send() enviando el string completo terminado en \n.Ejemplo: send(client_fd, "RES_LOGIN_OK|user|nick\n", ...);6. SOLUCIÓN DE PROBLEMAS (Troubleshooting)Error: "Connection Refused" (Conexión rechazada):Causa: El servidor en C no está corriendo o el puerto (5000) está mal configurado.El programa se queda "colgado" recibiendo:Causa: Olvidaste enviar el \n al final del mensaje. El receptor sigue esperando el fin de la línea.Mensajes que llegan "pegados":Causa: TCP envía un flujo constante. Si envías dos mensajes muy rápido, llegarán como uno solo: MSG1\nMSG2\n.Solución: El receptor debe separar el string cada vez que encuentre un \n.
+# 📑 Manual de Integración: Ecosistema de Chat
+**Proyecto:** Sistema Distribuido (C Backend + Python Frontends)  
+**Materia:** Computo Distribuido
+
+Este documento define las reglas de comunicación y los estándares técnicos para la integración entre el núcleo del sistema (C) y las interfaces de usuario (Web/Desktop).
+
+---
+
+## 🛰️ 1. Parámetros de Red (Las Coordenadas)
+Todos los componentes deben estar configurados con los siguientes valores para garantizar la visibilidad en la red:
+
+| Parámetro | Valor | Descripción |
+| :--- | :--- | :--- |
+| **Dirección IP** | `127.0.0.1` | Localhost (Pruebas en entorno local). |
+| **Puerto Backend (C)** | `5000` | Puerto principal de escucha (Sockets). |
+| **Puerto Web (Flask)** | `5100` | Puerto de acceso para el navegador. |
+| **Protocolo** | `TCP Sockets` | Flujo de bytes orientado a conexión. |
+
+---
+
+## 🚦 2. Orden de Ejecución (Pipeline Crítico)
+Para evitar errores de tipo `ConnectionRefusedError`, se debe seguir este orden estrictamente:
+
+1.  **Backend (`server.c`):** Iniciar el servidor central. Debe mostrar el estado `LISTENING` en el puerto 5000.
+2.  **Pasarela Web (`web_server.py`):** Iniciar el servidor Flask. Este actuará como cliente interno del servidor en C.
+3.  **Clientes Finales:** Ejecutar la aplicación de escritorio o acceder a `http://localhost:5100`.
+
+---
+
+## 📜 3. Especificación del Protocolo
+La comunicación se basa en un **protocolo de texto delimitado**. Cada paquete de datos debe seguir esta gramática:
+
+### Estructura de la Trama
+`COMANDO|ARGUMENTO1|ARGUMENTO2|...|ARGUMENTON\n`
+
+### 💡 Reglas de Oro
+* **Terminador (`\n`):** Cada mensaje **DEBE** terminar con un salto de línea. El receptor utiliza este carácter para saber que la trama está completa.
+* **Separador (`|`):** Se utiliza exclusivamente para dividir el comando de sus argumentos.
+* **Sanitización:** Los frontends deben prohibir el uso de `|` y `\n` en los campos de entrada de texto para evitar errores de parseo en el servidor.
+
+---
+
+## 📖 4. Diccionario de Comandos
+| Comando | Emisor | Propósito | Ejemplo de Trama |
+| :--- | :--- | :--- | :--- |
+| `REQ_LOGIN` | Frontend | Solicitar ingreso al sistema | `REQ_LOGIN|carlos\n` |
+| `RES_LOGIN_OK` | Backend | Confirmar éxito de login | `RES_LOGIN_OK\n` |
+| `REQ_CHAT_MSG` | Frontend | Enviar mensaje a la sala | `REQ_CHAT_MSG|Hola grupo\n` |
+| `EVT_NEW_MSG` | Backend | Notificar mensaje nuevo (Broadcast) | `EVT_NEW_MSG|carlos|Hola grupo\n` |
+| `EVT_JOINED` | Backend | Avisar que un usuario se conectó | `EVT_JOINED|fatima\n` |
+
+---
+
+## 🛠️ 5. Guía de Implementación para el Backend (C)
+El servidor debe manejar el flujo de datos de la siguiente manera:
+
+1.  **Recepción:** Usar `recv()` acumulando en un buffer hasta detectar el byte `\n`.
+2.  **Procesamiento:** Utilizar `strtok()` con el delimitador `"|"` para separar el comando.
+3.  **Respuesta:** Construir el string de respuesta y asegurar la concatenación del `\n` antes de llamar a `send()`.
+
+```c
+// Ejemplo de respuesta correcta en C
+char *respuesta = "RES_LOGIN_OK\n";
+send(client_fd, respuesta, strlen(respuesta), 0);

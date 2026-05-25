@@ -23,7 +23,7 @@ class Protocol:
     RES_REGISTER_ERR = "RES_REGISTER_ERR"
     RES_ROOM_CREATED = "RES_ROOM_CREATED"
     RES_JOIN_PENDING = "RES_JOIN_PENDING"
-    RES_JOIN_OK = "RES_JOIN_OK"
+    RES_JOIN_OK = "RES_JOIN_OK"S
     RES_ERROR = "RES_ERROR"
 
     # 3. Eventos (Servidor C -> Todos los Clientes afectados)

@@ -2,9 +2,7 @@
  * chatServerJson.c — Servidor de chat (proxy al database_server)
  *
  * Arquitectura:
- * Cliente <──TCP:5000──> chatServerJson <──TCP:8080──> database_server
- *
- * Versión con LOGS extendidos para depuración de respuestas JSON.
+ * Cliente <──TCP:5006──> chatServerJson <──TCP:8080──> database_server
  */
 
 #include <stdio.h>
@@ -32,8 +30,6 @@
         fflush(stdout);                  \
     } while (0)
 
-
-
     /* ============================================================
        CONSTANTES
        ============================================================ */
@@ -42,21 +38,19 @@
 #define DB_HOST       "172.18.2.3"
 #define DB_PORT       8080
 #define MAX_USERS     64
-#define BUFSIZE       65536   /* grande: el sync puede ser largo */
+#define BUFSIZE       65536
 
+       /* DB host/puerto configurables por argv */
 char g_db_host[256] = DB_HOST;
 int  g_db_port = DB_PORT;
 
-/*=========================================
-    BROADCAST
-  =========================================
-*/
-void broadcast_user_online(int user_id, const char* username) {
+/* ============================================================
+   BROADCAST UDP — notifica a toda la red que un usuario entró
+   ============================================================ */
+void broadcast_user_online(int user_id, const char* username)
+{
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        perror("Fallo al crear socket UDP para broadcast");
-        return;
-    }
+    if (sock < 0) { perror("broadcast socket"); return; }
 
     int broadcastEnable = 1;
     setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
@@ -64,16 +58,17 @@ void broadcast_user_online(int user_id, const char* username) {
     struct sockaddr_in broadcastAddr;
     memset(&broadcastAddr, 0, sizeof(broadcastAddr));
     broadcastAddr.sin_family = AF_INET;
-    broadcastAddr.sin_port = htons(UDP_PORT); // Tu puerto 5001
-    // La IP 255.255.255.255 envía el paquete a toda la red
+    broadcastAddr.sin_port = htons(UDP_PORT);
     broadcastAddr.sin_addr.s_addr = inet_addr("255.255.255.255");
 
     char buffer[512];
-    // Construimos el JSON idéntico a lo que espera Python
-    snprintf(buffer, sizeof(buffer), "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n", user_id, username);
+    snprintf(buffer, sizeof(buffer),
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n",
+        user_id, username);
 
-    sendto(sock, buffer, strlen(buffer), 0, (struct sockaddr*)&broadcastAddr, sizeof(broadcastAddr));
-    LOG("[UDP BROADCAST] 📢 Notificando a toda la red: %s", buffer);
+    sendto(sock, buffer, strlen(buffer), 0,
+        (struct sockaddr*)&broadcastAddr, sizeof(broadcastAddr));
+    LOG("[UDP BROADCAST] Notificando a la red: %s", buffer);
     close(sock);
 }
 
@@ -85,12 +80,12 @@ typedef struct {
     char username[64];
     int  active;
     char udp_ip[64];
-    int  udp_port;        /* 0 = sin UDP registrado aún */
+    int  udp_port;
 } ShmUser;
 
 typedef struct {
-    ShmUser     users[MAX_USERS];
-    int         user_count;
+    ShmUser         users[MAX_USERS];
+    int             user_count;
     pthread_mutex_t lock;
 } SharedState;
 
@@ -101,7 +96,6 @@ static int          g_udp_sd = -1;
 /* ============================================================
    RED — leer/enviar línea terminada en '\n'
    ============================================================ */
-
 static int recv_line(int fd, char* buf, int maxlen)
 {
     int total = 0;
@@ -126,7 +120,6 @@ static void send_line(int fd, const char* s)
 /* ============================================================
    DATABASE SERVER — conexión de un solo request
    ============================================================ */
-
 static int db_request(const char* req_json, char* out_buf, int out_size)
 {
     LOG("[DB-REQ] Conectando a database_server en %s:%d...", g_db_host, g_db_port);
@@ -150,24 +143,20 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
     int req_len = snprintf(req_buf, sizeof(req_buf), "%s\n", req_json);
     send(fd, req_buf, req_len, 0);
 
-    int total = 0;
-    int lines = 0;
+    int total = 0, lines = 0;
     char tmp[BUFSIZE];
 
     while (1) {
         int n = recv_line(fd, tmp, sizeof(tmp));
         if (n <= 0) {
-            LOG("[DB-RESP] Fin de respuesta (Socket cerrado por DB u orden EOF)");
+            LOG("[DB-RESP] Fin de respuesta (EOF de DB)");
             break;
         }
         if (tmp[0] == '\0') continue;
-
-        LOG("[DB-RESP] Línea cruda recibida de DB: '%s'", tmp);
-
-        /* Agregar al buffer de salida */
+        LOG("[DB-RESP] Línea recibida de DB: '%s'", tmp);
         int needed = strlen(tmp) + 2;
         if (total + needed >= out_size) {
-            LOG("[DB-RESP] ¡ALERTA! Buffer de salida saturado");
+            LOG("[DB-RESP] ALERTA: buffer de salida saturado");
             break;
         }
         total += snprintf(out_buf + total, out_size - total, "%s\n", tmp);
@@ -175,13 +164,12 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
     }
     out_buf[total] = '\0';
     close(fd);
-
-    LOG("[DB-RESP] Total: %d líneas consolidadas del database_server", lines);
+    LOG("[DB-RESP] Total: %d líneas del database_server", lines);
     return lines;
 }
 
 /* ============================================================
-   UDP — notificar a usuarios conectados
+   UDP — push a usuario específico
    ============================================================ */
 static void udp_notify_user(int db_user_id, const char* json_str)
 {
@@ -211,7 +199,7 @@ static void udp_push_notify_users(const char* resp_json, int skip_id)
 {
     cJSON* resp = cJSON_Parse(resp_json);
     if (!resp) {
-        LOG("[UDP-ERR] No se pudo parsear JSON para notificación UDP: '%s'", resp_json);
+        LOG("[UDP-ERR] No se pudo parsear JSON para notificación: '%s'", resp_json);
         return;
     }
     cJSON* arr = cJSON_GetObjectItem(resp, "notifyUsers");
@@ -227,7 +215,7 @@ static void udp_push_notify_users(const char* resp_json, int skip_id)
 }
 
 /* ============================================================
-   REGISTRAR / LIMPIAR USUARIO EN SHARED MEMORY
+   SHARED MEMORY — registrar / eliminar usuario
    ============================================================ */
 static void shm_register_user(int uid, const char* uname, const char* ip)
 {
@@ -286,40 +274,70 @@ static void atender_cliente(int sock, const char* client_ip)
     while (uid < 0) {
         int n = recv_line(sock, req_buf, sizeof(req_buf));
         if (n <= 0) {
-            LOG("[HIJO-AUTH] Cliente desconectado abruptamente en fase Auth");
+            LOG("[HIJO-AUTH] Cliente desconectado en fase Auth");
             close(sock); exit(0);
         }
         LOG("[HIJO-AUTH] Recibido del Cliente: '%s'", req_buf);
 
-        /* Validar estructura JSON */
         cJSON* req = cJSON_Parse(req_buf);
         if (!req) {
-            LOG("[HIJO-AUTH-ERR] El cliente envió algo que NO es JSON válido: '%s'", req_buf);
+            LOG("[HIJO-AUTH-ERR] JSON inválido del cliente: '%s'", req_buf);
             continue;
         }
         cJSON* jtype = cJSON_GetObjectItem(req, "type");
         if (!cJSON_IsString(jtype)) {
-            LOG("[HIJO-AUTH-ERR] JSON del cliente no contiene campo 'type' string");
+            LOG("[HIJO-AUTH-ERR] JSON sin campo 'type'");
             cJSON_Delete(req); continue;
         }
         const char* type = jtype->valuestring;
         LOG("[HIJO-AUTH] Request tipo: %s", type);
 
-        /* Petición al Database Server */
         int lines = db_request(req_buf, resp_buf, sizeof(resp_buf));
         if (lines < 0) {
-            LOG("[HIJO-AUTH-ERR] Fallo crítico al comunicarse con el database_server");
+            LOG("[HIJO-AUTH-ERR] Fallo crítico con database_server");
             cJSON_Delete(req);
             close(sock); exit(1);
         }
 
         if (strcmp(type, "CREATE_ACCOUNT") == 0) {
-            char* line = strtok(resp_buf, "\n");
+            int create_ok = 0;
+            char resp_copy[BUFSIZE];
+            strncpy(resp_copy, resp_buf, sizeof(resp_copy) - 1);
+            resp_copy[sizeof(resp_copy) - 1] = '\0';
+
+            char* line = strtok(resp_copy, "\n");
             while (line) {
-                LOG("[HIJO-AUTH] Reenviando a cliente (CREATE_ACCOUNT_RESP): '%s'", line);
-                send_line(sock, line);
+                if (line[0] != '\0') {
+                    LOG("[HIJO-AUTH] Reenviando a cliente (CREATE_ACCOUNT_RESP): '%s'", line);
+                    send_line(sock, line);
+
+                    cJSON* j = cJSON_Parse(line);
+                    if (j) {
+                        cJSON* jsuccess = cJSON_GetObjectItem(j, "success");
+                        if (cJSON_IsNumber(jsuccess) && jsuccess->valueint == 1) {
+                            create_ok = 1;
+                            cJSON* ju = cJSON_GetObjectItem(j, "userId");
+                            cJSON* jn = cJSON_GetObjectItem(j, "username");
+                            if (ju) uid = ju->valueint;
+                            if (jn && jn->valuestring)
+                                strncpy(username, jn->valuestring, sizeof(username) - 1);
+                        }
+                        cJSON_Delete(j);
+                    }
+                }
                 line = strtok(NULL, "\n");
             }
+
+            if (create_ok && uid > 0) {
+                shm_register_user(uid, username, client_ip);
+                LOG("[HIJO-CREATE-OK] Registro exitoso. uid=%d, usuario=%s", uid, username);
+                broadcast_user_online(uid, username);
+                /* Salir del bucle de auth para entrar a sesión */
+                cJSON_Delete(req);
+                break;
+            }
+            /* Si create_ok==0, uid sigue en -1 y el bucle continúa */
+            uid = -1;
             cJSON_Delete(req);
             continue;
         }
@@ -333,18 +351,19 @@ static void atender_cliente(int sock, const char* client_ip)
             char* line = strtok(resp_copy, "\n");
             while (line) {
                 if (line[0] != '\0') {
-                    LOG("[HIJO-AUTH] Enviando línea de respuesta al cliente: '%s'", line);
+                    LOG("[HIJO-AUTH] Enviando línea al cliente: '%s'", line);
                     send_line(sock, line);
 
                     cJSON* j = cJSON_Parse(line);
                     if (!j) {
-                        LOG("[HIJO-AUTH-ALERTA] Línea enviada NO es JSON parseable: '%s'", line);
+                        LOG("[HIJO-AUTH-ALERTA] Línea enviada no es JSON: '%s'", line);
                     }
                     else {
                         cJSON* jt = cJSON_GetObjectItem(j, "type");
                         cJSON* js = cJSON_GetObjectItem(j, "success");
-                        if (cJSON_IsString(jt) && strcmp(jt->valuestring, "AUTH_RESPONSE") == 0) {
-                            LOG("[HIJO-AUTH] Detectado AUTH_RESPONSE. success=%d",
+                        if (cJSON_IsString(jt) &&
+                            strcmp(jt->valuestring, "AUTH_RESPONSE") == 0) {
+                            LOG("[HIJO-AUTH] AUTH_RESPONSE detectado. success=%d",
                                 cJSON_IsNumber(js) ? js->valueint : -1);
                             if (cJSON_IsNumber(js) && js->valueint) {
                                 auth_ok = 1;
@@ -363,11 +382,12 @@ static void atender_cliente(int sock, const char* client_ip)
 
             if (auth_ok && uid > 0) {
                 shm_register_user(uid, username, client_ip);
-                LOG("[HIJO-AUTH-OK] Autenticación Exitosa. uid=%d, usuario=%s", uid, username);
+                LOG("[HIJO-AUTH-OK] Autenticación exitosa. uid=%d, usuario=%s", uid, username);
                 broadcast_user_online(uid, username);
             }
             else {
-                LOG("[HIJO-AUTH-FAIL] Autenticación rechazada o incompleta. uid=%d", uid);
+                LOG("[HIJO-AUTH-FAIL] Autenticación rechazada. uid=%d", uid);
+                uid = -1;
             }
             cJSON_Delete(req);
             continue;
@@ -407,13 +427,12 @@ static void atender_cliente(int sock, const char* client_ip)
                 cJSON* j = cJSON_Parse(line);
                 if (j) {
                     cJSON* arr = cJSON_GetObjectItem(j, "notifyUsers");
-                    if (cJSON_IsArray(arr)) {
+                    if (cJSON_IsArray(arr))
                         udp_push_notify_users(line, uid);
-                    }
                     cJSON_Delete(j);
                 }
                 else {
-                    LOG("[HIJO-SESION-ALERTA] Línea de sesión enviada no es JSON: '%s'", line);
+                    LOG("[HIJO-SESION-ALERTA] Línea no es JSON: '%s'", line);
                 }
             }
             line = strtok(NULL, "\n");
@@ -422,7 +441,7 @@ static void atender_cliente(int sock, const char* client_ip)
 
     shm_unregister_user(uid);
     close(sock);
-    LOG("[HIJO-CLIENTE] Finalizado por completo. uid=%d", uid);
+    LOG("[HIJO-CLIENTE] Finalizado. uid=%d", uid);
     exit(0);
 }
 
@@ -435,7 +454,7 @@ static void* hilo_udp(void* arg)
     char buf[BUFSIZE];
     struct sockaddr_in src;
     socklen_t slen = sizeof(src);
-    LOG("[UDP-HILO] Escuchando activamente en puerto %d", UDP_PORT);
+    LOG("[UDP-HILO] Escuchando en puerto %d", UDP_PORT);
     while (1) {
         int n = recvfrom(g_udp_sd, buf, sizeof(buf) - 1, 0,
             (struct sockaddr*)&src, &slen);
@@ -445,18 +464,14 @@ static void* hilo_udp(void* arg)
 }
 
 /* ============================================================
-   DB PING — verifica conectividad con database_server al arrancar
+   DB PING — verifica conectividad al arrancar
    ============================================================ */
 static int db_ping(void)
 {
     LOG("[DB-PING] Probando conexión a %s:%d ...", g_db_host, g_db_port);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        LOG("[DB-PING] ERROR: no se pudo crear socket de prueba");
-        return 0;
-    }
+    if (fd < 0) { LOG("[DB-PING] ERROR: no se pudo crear socket"); return 0; }
 
-    /* Timeout de 3 segundos para el intento de conexión */
     struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -469,13 +484,13 @@ static int db_ping(void)
 
     if (connect(fd, (struct sockaddr*)&db_addr, sizeof(db_addr)) < 0) {
         perror("[DB-PING] connect");
-        LOG("[DB-PING] ✗ FALLO — database_server NO alcanzable en %s:%d", g_db_host, g_db_port);
+        LOG("[DB-PING] FALLO — database_server NO alcanzable en %s:%d", g_db_host, g_db_port);
         close(fd);
         return 0;
     }
 
     close(fd);
-    LOG("[DB-PING] ✓ OK — database_server alcanzable en %s:%d", g_db_host, g_db_port);
+    LOG("[DB-PING] OK — database_server alcanzable en %s:%d", g_db_host, g_db_port);
     return 1;
 }
 
@@ -485,7 +500,7 @@ static int db_ping(void)
 static void sig_chld(int s) { (void)s; while (waitpid(-1, NULL, WNOHANG) > 0); }
 static void sig_int(int s) {
     (void)s;
-    LOG("[SIGNAL] Cierre por SIGINT controlado");
+    LOG("[SIGNAL] Cierre controlado por SIGINT");
     if (g_tcp_sd != -1) close(g_tcp_sd);
     if (g_udp_sd != -1) close(g_udp_sd);
     exit(0);
@@ -494,23 +509,18 @@ static void sig_int(int s) {
 /* ============================================================
    MAIN
    ============================================================ */
-   /* ============================================================
-      MAIN
-      ============================================================ */
-int main(int argc, char* argv[]) {
-    // Procesar argumentos de consola para la base de datos
-    if (argc > 1) {
-        strncpy(g_db_host, argv[1], sizeof(g_db_host) - 1);
-    }
-    if (argc > 2) {
-        g_db_port = atoi(argv[2]);
-    }
+int main(int argc, char* argv[])
+{
+    /* Aceptar IP y puerto de la DB por argumento: ./chatServer [db_ip] [db_port] */
+    if (argc > 1) strncpy(g_db_host, argv[1], sizeof(g_db_host) - 1);
+    if (argc > 2) g_db_port = atoi(argv[2]);
 
-    LOG("[PADRE] Configuración DB -> Servidor: %s, Puerto: %d", g_db_host, g_db_port);
-    LOG("[PADRE] Iniciando Proxy ChatServer. Apuntando a DB en %s:%d", g_db_host, g_db_port);
+    LOG("[PADRE] Configuración DB → %s:%d", g_db_host, g_db_port);
 
     g_state = mmap(NULL, sizeof(SharedState),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (g_state == MAP_FAILED) { perror("mmap"); exit(1); }
+    memset(g_state, 0, sizeof(SharedState));
 
     pthread_mutexattr_t mattr;
     pthread_mutexattr_init(&mattr);
@@ -519,6 +529,7 @@ int main(int argc, char* argv[]) {
     pthread_mutexattr_destroy(&mattr);
     LOG("[PADRE] Memoria compartida inicializada");
 
+    /* Socket UDP */
     g_udp_sd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_sd < 0) { perror("udp socket"); exit(1); }
     struct sockaddr_in ua;
@@ -533,6 +544,7 @@ int main(int argc, char* argv[]) {
     pthread_create(&tid, NULL, hilo_udp, NULL);
     pthread_detach(tid);
 
+    /* Socket TCP */
     g_tcp_sd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_tcp_sd < 0) { perror("tcp socket"); exit(1); }
     int opt = 1;
@@ -550,38 +562,29 @@ int main(int argc, char* argv[]) {
     signal(SIGCHLD, sig_chld);
     signal(SIGINT, sig_int);
 
-    /* Verificar conectividad con la DB antes de aceptar clientes */
     if (!db_ping()) {
-        LOG("[PADRE] ADVERTENCIA: no se pudo conectar a la DB en este momento.");
-        LOG("[PADRE] El servidor seguirá corriendo pero los clientes fallarán hasta que la DB esté disponible.");
+        LOG("[PADRE] ADVERTENCIA: DB no alcanzable. El servidor esperará.");
     }
 
-    // --- NUEVA SECCIÓN: AUTO-DETECTAR LA IP REAL DEL CHAT SERVER ---
+    /* Auto-detectar IP real del servidor */
     char realIP[64] = "0.0.0.0";
     struct ifaddrs* interfaces = NULL;
-    struct ifaddrs* temp_addr = NULL;
-
     if (getifaddrs(&interfaces) == 0) {
-        temp_addr = interfaces;
-        while (temp_addr != NULL) {
-            if (temp_addr->ifa_addr != NULL && temp_addr->ifa_addr->sa_family == AF_INET) {
-                char* ip = inet_ntoa(((struct sockaddr_in*)temp_addr->ifa_addr)->sin_addr);
-                // Ignoramos localhost para obtener la IP de la red de Docker
-                if (strcmp(ip, "127.0.0.1") != 0) {
-                    strcpy(realIP, ip);
-                    break;
-                }
+        for (struct ifaddrs* ifa = interfaces; ifa; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+                char* ip = inet_ntoa(((struct sockaddr_in*)ifa->ifa_addr)->sin_addr);
+                if (strcmp(ip, "127.0.0.1") != 0) { strncpy(realIP, ip, 63); break; }
             }
-            temp_addr = temp_addr->ifa_next;
         }
         freeifaddrs(interfaces);
     }
 
     LOG("==================================================");
-    LOG(" CHAT SERVER INICIADO EXITOSAMENTE");
-    LOG(" Dirección IP del Servidor : %s", realIP);
-    LOG(" Escuchando clientes TCP   : %d", TCP_PORT);
-    LOG(" Listo para UDP            : %d", UDP_PORT);
+    LOG(" CHAT SERVER INICIADO");
+    LOG(" IP del servidor  : %s", realIP);
+    LOG(" Puerto TCP       : %d", TCP_PORT);
+    LOG(" Puerto UDP       : %d", UDP_PORT);
+    LOG(" Database         : %s:%d", g_db_host, g_db_port);
     LOG("==================================================");
 
     while (1) {
@@ -592,7 +595,7 @@ int main(int argc, char* argv[]) {
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &ca.sin_addr, ip, sizeof(ip));
-        LOG("[PADRE] Nueva conexión entrante desde TCP %s", ip);
+        LOG("[PADRE] Nueva conexión TCP desde %s", ip);
 
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); close(cfd); continue; }

@@ -58,4 +58,9 @@
 		"name":	"papu",
 		"password":	"papupapu",
 		"chatRoomsIds":	[]
+	}, {
+		"id":	13,
+		"name":	"PruebanuevoUsuario",
+		"password":	"pruebaprueba",
+		"chatRoomsIds":	[]
 	}]

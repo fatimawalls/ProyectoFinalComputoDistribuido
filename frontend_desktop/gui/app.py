@@ -855,130 +855,229 @@ class ChatClientGUI:
 
         panel = tk.Toplevel(self.root)
         panel.title(f"MANAGE // {room['name'].upper()}")
-        panel.geometry("520x580")
+        panel.geometry("540x720")
+        panel.resizable(False, True)
         panel.configure(bg=self.BG_DARK)
         panel.transient(self.root)
         panel.grab_set()
 
-        tk.Label(panel, text=f"PANEL DE CONTROL // #{room['name'].upper()}", 
+        # ── Título ────────────────────────────────────────────────
+        tk.Label(panel, text=f"PANEL DE CONTROL // #{room['name'].upper()}",
                  font=self.FONT_TITLE, bg=self.BG_DARK, fg=self.ACCENT).pack(pady=15)
 
-        # ─── SECCIÓN A: SOLICITUDES DE INGRESO ───
-        tk.Label(panel, text="SOLICITUDES PENDIENTES", font=self.FONT_LABEL, 
-                 bg=self.BG_DARK, fg=self.WARNING_COLOR).pack(anchor="w", padx=25, pady=(10,0))
-        
-        req_frame = tk.Frame(panel, bg=self.BG_MAIN, bd=1, relief="solid")
-        req_frame.pack(fill="both", expand=True, padx=25, pady=5)
+        # ── Scrollable interior ───────────────────────────────────
+        canvas   = tk.Canvas(panel, bg=self.BG_DARK, highlightthickness=0)
+        scrollbar = tk.Scrollbar(panel, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="top", fill="both", expand=True)
 
-        # Mapeo de solicitudes
+        inner = tk.Frame(canvas, bg=self.BG_DARK)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_canvas_configure(e):
+            canvas.itemconfig(inner_id, width=e.width)
+
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # ─────────────────────────────────────────────────────────
+        # SECCIÓN A: AÑADIR USUARIO (ADD_USER del handbook)
+        # ─────────────────────────────────────────────────────────
+        tk.Label(inner, text="AÑADIR USUARIO A LA SALA", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.SUCCESS_COLOR).pack(anchor="w", padx=25, pady=(10, 0))
+
+        add_frame = tk.Frame(inner, bg=self.BG_MAIN, bd=1, relief="solid")
+        add_frame.pack(fill="x", padx=25, pady=5)
+
+        # Usuarios conocidos que NO están en la sala
+        if self.network:
+            room_user_ids = set(room.get("userIds", []))
+            my_id = self.network.me.get("id")
+            addable = [
+                (uid, udata.get("name", f"User_{uid}"))
+                for uid, udata in self.network.users.items()
+                if uid not in room_user_ids
+            ]
+        else:
+            room_members = set(self.mock.get_members(room_id))
+            addable = [
+                (u["username"], u["nickname"])
+                for u in self.mock.users
+                if u["username"] not in room_members
+            ]
+
+        if not addable:
+            tk.Label(add_frame, text="No hay usuarios disponibles para agregar.",
+                     font=self.FONT_UI, bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=12)
+        else:
+            for a_id, a_name in addable:
+                row = tk.Frame(add_frame, bg=self.BG_MAIN, pady=4)
+                row.pack(fill="x", padx=10)
+
+                tk.Label(row, text=f"● {a_name}", font=self.FONT_UI,
+                         bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
+
+                def _add(target_id=a_id, target_name=a_name):
+                    if self.network:
+                        # Handbook: {"type":"ADD_USER","chatRoomId":X,"userId":Y}
+                        self.network.add_user_to_room(target_id, room_id)
+                        # La respuesta llega vía on_user_added → refresh_sidebar
+                    else:
+                        r = self.mock.get_room(room_id)
+                        if r and target_id not in r["members"]:
+                            r["members"].append(target_id)
+                    panel.destroy()
+                    self.refresh_sidebar()
+
+                btn_add = tk.Button(row, text="ADD", font=self.FONT_SMALL,
+                                    bg=self.SUCCESS_COLOR, fg=self.BG_DARK,
+                                    relief="flat", cursor="hand2", command=_add)
+                btn_add.pack(side="right")
+                btn_add.bind("<Enter>", lambda e, b=btn_add: b.config(bg="#1AC96A"))
+                btn_add.bind("<Leave>", lambda e, b=btn_add: b.config(bg=self.SUCCESS_COLOR))
+
+        # ─────────────────────────────────────────────────────────
+        # SECCIÓN B: SOLICITUDES DE INGRESO PENDIENTES
+        # ─────────────────────────────────────────────────────────
+        tk.Frame(inner, bg="#2A2A2A", height=1).pack(fill="x", padx=25, pady=(12, 0))
+        tk.Label(inner, text="SOLICITUDES PENDIENTES", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.WARNING_COLOR).pack(anchor="w", padx=25, pady=(8, 0))
+
+        req_frame = tk.Frame(inner, bg=self.BG_MAIN, bd=1, relief="solid")
+        req_frame.pack(fill="x", padx=25, pady=5)
+
         requests_list = [] if self.network else self.mock.requests.get(room_id, [])
 
         if not requests_list:
             tk.Label(req_frame, text="No hay solicitudes pendientes.", font=self.FONT_UI,
-                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=30)
+                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=12)
         else:
             for req in requests_list:
                 r_item = tk.Frame(req_frame, bg=self.BG_MAIN, pady=4)
                 r_item.pack(fill="x", padx=10)
-                
-                # Mostrar ID y Nombre asociado según lo solicitado
-                r_id = req.get('userId', req.get('username', '?'))
-                r_name = req.get('nickname', req.get('name', 'Usuario'))
-                
-                tk.Label(r_item, text=f"• ID: {r_id} — {r_name}", font=self.FONT_UI,
+
+                r_id   = req.get("userId",   req.get("username", "?"))
+                r_name = req.get("nickname", req.get("name",     "Usuario"))
+
+                tk.Label(r_item, text=f"• {r_name} (ID: {r_id})", font=self.FONT_UI,
                          bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
-                
-                # Handlers lambda limpios redireccionados según el entorno de ejecución
+
                 def accept_action(uid=r_id):
                     if self.network:
-                        # Estructura del Servidor C: Enviar comando de autorización
-                        self.network.send({"type": "ACCEPT_USER", "chatRoomId": int(room_id), "userId": int(uid)})
+                        self.network.add_user_to_room(int(uid), room_id)
                     else:
                         self.mock.accept_request(room_id, uid)
                     panel.destroy()
                     self.open_coordinator_panel(room_id)
 
                 def reject_action(uid=r_id):
-                    if self.network:
-                        self.network.send({"type": "REJECT_USER", "chatRoomId": int(room_id), "userId": int(uid)})
-                    else:
+                    if not self.network:
                         self.mock.reject_request(room_id, uid)
                     panel.destroy()
                     self.open_coordinator_panel(room_id)
 
-                btn_rej = tk.Button(r_item, text="REJECT", font=self.FONT_SMALL, bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", command=reject_action)
-                btn_rej.pack(side="right", padx=2)
-                btn_acc = tk.Button(r_item, text="ACCEPT", font=self.FONT_SMALL, bg=self.SUCCESS_COLOR, fg=self.BG_DARK, relief="flat", command=accept_action)
-                btn_acc.pack(side="right", padx=2)
+                tk.Button(r_item, text="REJECT", font=self.FONT_SMALL,
+                          bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat",
+                          command=reject_action).pack(side="right", padx=2)
+                tk.Button(r_item, text="ACCEPT", font=self.FONT_SMALL,
+                          bg=self.SUCCESS_COLOR, fg=self.BG_DARK, relief="flat",
+                          command=accept_action).pack(side="right", padx=2)
 
-        # ─── SECCIÓN B: EXPULSIÓN DE MIEMBROS ───
-        tk.Label(panel, text="ELIMINAR MIEMBROS ACTUALES", font=self.FONT_LABEL, 
-                 bg=self.BG_DARK, fg=self.ERROR_COLOR).pack(anchor="w", padx=25, pady=(15,0))
-        
-        memb_frame = tk.Frame(panel, bg=self.BG_MAIN, bd=1, relief="solid")
-        memb_frame.pack(fill="both", expand=True, padx=25, pady=5)
+        # ─────────────────────────────────────────────────────────
+        # SECCIÓN C: EXPULSAR MIEMBROS (REMOVE_USER del handbook)
+        # ─────────────────────────────────────────────────────────
+        tk.Frame(inner, bg="#2A2A2A", height=1).pack(fill="x", padx=25, pady=(12, 0))
+        tk.Label(inner, text="EXPULSAR MIEMBROS", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.ERROR_COLOR).pack(anchor="w", padx=25, pady=(8, 0))
 
-        # Obtener lista segura cruzada
+        memb_frame = tk.Frame(inner, bg=self.BG_MAIN, bd=1, relief="solid")
+        memb_frame.pack(fill="x", padx=25, pady=5)
+
         if self.network:
-            # Lista numérica extraída del protocolo C
-            raw_members = room.get("userIds", [])
-            # Convertimos a tuplas (id, nombre) para renderizar e identificar
-            display_members = []
-            for m_id in raw_members:
-                user_info = self.users.get(m_id, {}) if hasattr(self, 'users') else {}
-                m_name = user_info.get("name", "Desconocido")
-                # Evitar que el propio coordinador se liste para autoexpulsarse
-                if str(m_id) != str(self.username): 
-                    display_members.append((m_id, m_name))
+            coord_id = room.get("coordinatorId")
+            display_members = [
+                (m_id, self.network.users.get(m_id, {}).get("name", f"User_{m_id}"))
+                for m_id in room.get("userIds", [])
+                if m_id != coord_id          # el coordinador no se patea a sí mismo
+            ]
         else:
-            display_members = [(m, m) for m in self.mock.get_members(room_id) if m != self.username]
+            display_members = [
+                (m, m) for m in self.mock.get_members(room_id)
+                if m != self.username
+            ]
 
         if not display_members:
             tk.Label(memb_frame, text="No hay otros miembros en la sala.", font=self.FONT_UI,
-                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=30)
+                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=12)
         else:
-            for uid, uname in display_members:
+            for m_id, m_name in display_members:
                 m_item = tk.Frame(memb_frame, bg=self.BG_MAIN, pady=4)
                 m_item.pack(fill="x", padx=10)
-                
-                # Imprimir ID y Nombre asociado
-                tk.Label(m_item, text=f"• ID: {uid} — {uname}", font=self.FONT_UI, bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
-                
-                # Función de remoción basada en el comando REMOVE_USER del Handbook
-                def kick_action(target_id=uid):
-                    if self.network:
-                        # payload del handbook: {"type":"REMOVE_USER","chatRoomId":X,"userId":Y}
-                        self.network.remove_user(room_id, user_id)
-                    else:
-                        self.mock.kick_user(room_id, target_id)
-                    panel.destroy()
-                    self.open_coordinator_panel(room_id)
 
-                btn_kick = tk.Button(m_item, text="KICK", font=self.FONT_SMALL, bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", command=kick_action)
+                tk.Label(m_item, text=f"● {m_name}", font=self.FONT_UI,
+                         bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
+
+                def kick_action(target_id=m_id, target_name=m_name):
+                    panel.grab_release()
+                    if self.confirm_dialog("KICK USER",
+                                          f"¿Expulsar a {target_name} de la sala?",
+                                          parent=panel):
+                        if self.network:
+                            # Handbook: {"type":"REMOVE_USER","chatRoomId":X,"userId":Y}
+                            self.network.remove_user_from_room(target_id, room_id)
+                        else:
+                            self.mock.kick_user(room_id, target_id)
+                        panel.destroy()
+                        self.refresh_sidebar()
+                    else:
+                        panel.grab_set()
+
+                btn_kick = tk.Button(m_item, text="KICK", font=self.FONT_SMALL,
+                                     bg=self.ERROR_COLOR, fg=self.TEXT_MAIN,
+                                     relief="flat", cursor="hand2", command=kick_action)
                 btn_kick.pack(side="right")
 
-        # ─── SECCIÓN C: PIE DE PANEL Y BORRADO TOTAL ───
+        # ─────────────────────────────────────────────────────────
+        # PIE: ELIMINAR SALA + CERRAR
+        # ─────────────────────────────────────────────────────────
         footer_frame = tk.Frame(panel, bg=self.BG_DARK)
         footer_frame.pack(fill="x", side="bottom", padx=25, pady=15)
 
         def delete_room_action():
-            if self.network:
-                # payload del handbook: {"type":"DELETE_CHATROOM","chatRoomId":X}
-                self.network.delete_chatroom(room_id)
+            panel.grab_release()
+            if self.confirm_dialog("DELETE ROOM",
+                                   "¿Eliminar esta sala? Solo es posible si eres el único miembro.",
+                                   parent=panel):
+                if self.network:
+                    # Handbook: {"type":"DELETE_CHATROOM","chatRoomId":X}
+                    self.network.delete_room(room_id)
+                else:
+                    success = self.mock.delete_room(room_id)
+                    if not success:
+                        self.info_dialog("ADVERTENCIA",
+                                         "Solo puedes eliminar la sala si eres el último miembro.",
+                                         parent=panel, color=self.WARNING_COLOR)
+                        panel.grab_set()
+                        return
+                panel.destroy()
+                self.current_room = None
+                self.refresh_sidebar()
+                self.show_welcome_view()
             else:
-                self.mock.delete_room(room_id)
-            panel.destroy()
-            self.update_rooms_list()  # CORRECCIÓN DE LA EXCEPCIÓN: 'refresh_rooms_ui' -> 'update_rooms_list'
+                panel.grab_set()
 
-        btn_delete_room = tk.Button(footer_frame, text="DELETE ROOM", font=self.FONT_LABEL, 
-                                    bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
-                                    command=delete_room_action, bd=0)
-        btn_delete_room.pack(side="left", ipady=8, ipadx=10)
+        tk.Button(footer_frame, text="DELETE ROOM", font=self.FONT_LABEL,
+                  bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
+                  command=delete_room_action, bd=0).pack(side="left", ipady=8, ipadx=10)
 
-        btn_close = tk.Button(footer_frame, text="CLOSE", font=self.FONT_LABEL,
-                              bg=self.BG_SECONDARY, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
-                              command=panel.destroy, bd=0)
-        btn_close.pack(side="right", ipady=8, ipadx=20)
+        tk.Button(footer_frame, text="CLOSE", font=self.FONT_LABEL,
+                  bg=self.BG_SECONDARY, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
+                  command=panel.destroy, bd=0).pack(side="right", ipady=8, ipadx=20)
     
     # ─────────────────────────────────────────────
     #  ACCIONES COORDINADOR

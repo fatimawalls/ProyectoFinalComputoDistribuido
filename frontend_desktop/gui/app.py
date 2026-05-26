@@ -801,6 +801,32 @@ class ChatClientGUI:
                               command=panel.destroy, bd=0)
         btn_close.pack(fill="x", side="bottom", padx=20, pady=15, ipady=8)
 
+    def refresh_users_ui(self):
+        # 1. Asegurarnos de que tenemos el panel y la red
+        if not hasattr(self, 'panel_usuarios') or not self.network:
+            return
+
+        # 2. DESTRUIR SOLO LOS BOTONES VIEJOS DE LOS USUARIOS
+        # ¡Ojo! Si aquí destruyes el panel entero y luego llamas a tu función
+        # que construye la barra lateral, vas a duplicar partes de la UI.
+        for widget in self.panel_usuarios.winfo_children():
+            widget.destroy()
+
+        # 3. VOLVER A CREAR SOLO LOS BOTONES DE CONTACTOS
+        for uid, user_data in self.network.users.items():
+            username = user_data.get("name", f"User_{uid}")
+            
+            # Solo creamos el botón y lo empaquetamos (pack)
+            btn_user = tk.Button(
+                self.panel_usuarios, 
+                text=f"🟢 {username}", 
+                font=self.FONT_UI,
+                bg=self.BG_MAIN, 
+                fg=self.TEXT_MAIN, 
+                relief="flat",
+                anchor="w"
+            )
+            btn_user.pack(fill="x", pady=2)
     # ─────────────────────────────────────────────
     #  LEAVE ROOM
     # ─────────────────────────────────────────────
@@ -1081,6 +1107,16 @@ class ChatClientGUI:
             self.show_welcome_view()
         self.refresh_sidebar()
 
+    def refresh_users_ui(self):
+        # 1. Limpiar el contenedor actual de usuarios
+        for widget in self.panel_usuarios.winfo_children():
+            widget.destroy()
+        
+        # 2. Volver a iterar sobre la memoria actualizada y dibujarlos
+        for uid, user_data in self.network.users.items():
+            # Aquí creas tu Label, Button, etc.
+            tk.Label(self.panel_usuarios, text=f"🟢 {user_data['name']}").pack()
+
     # ─────────────────────────────────────────────
     #  CREATE ROOM
     # ─────────────────────────────────────────────
@@ -1212,6 +1248,8 @@ class ChatClientGUI:
 
     def open_profile(self):
         UserProfileWindow(self.root, username=self.username, current_nickname=self.nickname)
+
+    
 
 
 if __name__ == "__main__":

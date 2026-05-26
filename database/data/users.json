@@ -7,7 +7,7 @@
 		"id":	2,
 		"name":	"soto",
 		"password":	"soto",
-		"chatRoomsIds":	[2, 3, 4, 5, 6, 16]
+		"chatRoomsIds":	[2, 3, 4, 5, 6, 16, 17]
 	}, {
 		"id":	3,
 		"name":	"juan",

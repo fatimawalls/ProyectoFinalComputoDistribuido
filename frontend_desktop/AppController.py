@@ -16,6 +16,9 @@ class AppController:
         self.login_window    = None
         self.register_window = None
 
+        # Guard: evita que show_lobby se ejecute más de una vez por sesión
+        self._lobby_shown = False
+
         # ── Ventana raíz ÚNICA — vive toda la sesión ─────────────────
         self.root = tk.Tk()
         self.root.withdraw()          # invisible hasta que haya algo que mostrar
@@ -25,6 +28,8 @@ class AppController:
         self.network.on_register_response   = self.on_register_response_received
         self.network.on_sync_complete       = self.on_sync_complete_received
         self.network.on_server_disconnected = self.on_server_disconnected
+
+        self.network.on_user_online         = self.on_user_online_received
 
     # ─────────────────────────────────────────────────────────────
     # ARRANQUE
@@ -69,6 +74,12 @@ class AppController:
         )
 
     def show_lobby(self):
+        # Guard: si el lobby ya fue construido, ignorar llamadas duplicadas
+        if self._lobby_shown:
+            print("[CONTROLADOR] show_lobby ignorado — lobby ya activo (sync duplicado del servidor)")
+            return
+        self._lobby_shown = True
+
         # Cerrar login si aún existe
         if self.login_window:
             try:
@@ -186,6 +197,24 @@ class AppController:
             else:
                 messagebox.showerror("Error de Registro", msg, parent=self.root)
             self.network.connected = False
+
+    # ─────────────────────────────────────────────────────────────
+    # NUEVO EVENTO PUSH: USUARIO CONECTADO EN TIEMPO REAL
+    # ─────────────────────────────────────────────────────────────
+    def on_user_online_received(self, user_id, username):
+        """
+        Se ejecuta en el hilo de red cuando un usuario nuevo entra al servidor.
+        Llamamos a Tkinter de forma segura usando root.after
+        """
+        self.root.after(0, self._safe_update_user_list, user_id, username)
+
+    def _safe_update_user_list(self, user_id, username):
+        """
+        Le pide a la aplicación principal que refresque la UI si está abierta.
+        """
+        if hasattr(self, 'app') and self.app is not None:
+            self.app.refresh_users_ui()
+
 
     def on_server_disconnected(self):
         print("[CONTROLADOR] Desconectado del servidor.")

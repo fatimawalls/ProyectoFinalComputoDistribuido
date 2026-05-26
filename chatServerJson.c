@@ -32,6 +32,8 @@
         fflush(stdout);                  \
     } while (0)
 
+
+
     /* ============================================================
        CONSTANTES
        ============================================================ */
@@ -45,9 +47,39 @@
 char g_db_host[256] = DB_HOST;
 int  g_db_port = DB_PORT;
 
-       /* ============================================================
-          SHARED MEMORY — usuarios conectados (para UDP push)
-          ============================================================ */
+/*=========================================
+    BROADCAST
+  =========================================
+*/
+void broadcast_user_online(int user_id, const char* username) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("Fallo al crear socket UDP para broadcast");
+        return;
+    }
+
+    int broadcastEnable = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
+
+    struct sockaddr_in broadcastAddr;
+    memset(&broadcastAddr, 0, sizeof(broadcastAddr));
+    broadcastAddr.sin_family = AF_INET;
+    broadcastAddr.sin_port = htons(UDP_PORT); // Tu puerto 5001
+    // La IP 255.255.255.255 envía el paquete a toda la red
+    broadcastAddr.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+    char buffer[512];
+    // Construimos el JSON idéntico a lo que espera Python
+    snprintf(buffer, sizeof(buffer), "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n", user_id, username);
+
+    sendto(sock, buffer, strlen(buffer), 0, (struct sockaddr*)&broadcastAddr, sizeof(broadcastAddr));
+    LOG("[UDP BROADCAST] 📢 Notificando a toda la red: %s", buffer);
+    close(sock);
+}
+
+/* ============================================================
+   SHARED MEMORY — usuarios conectados (para UDP push)
+   ============================================================ */
 typedef struct {
     int  db_user_id;
     char username[64];
@@ -304,22 +336,23 @@ static void atender_cliente(int sock, const char* client_ip)
                     LOG("[HIJO-AUTH] Enviando línea de respuesta al cliente: '%s'", line);
                     send_line(sock, line);
 
-                    /* Validar si la línea que le mandamos es JSON */
                     cJSON* j = cJSON_Parse(line);
                     if (!j) {
-                        LOG("[HIJO-AUTH-ALERTA] ¡CUIDADO! La línea enviada NO es un JSON parseable. Contenido: '%s'", line);
+                        LOG("[HIJO-AUTH-ALERTA] Línea enviada NO es JSON parseable: '%s'", line);
                     }
                     else {
                         cJSON* jt = cJSON_GetObjectItem(j, "type");
                         cJSON* js = cJSON_GetObjectItem(j, "success");
                         if (cJSON_IsString(jt) && strcmp(jt->valuestring, "AUTH_RESPONSE") == 0) {
-                            LOG("[HIJO-AUTH] Detectado AUTH_RESPONSE. success=%d", cJSON_IsNumber(js) ? js->valueint : -1);
+                            LOG("[HIJO-AUTH] Detectado AUTH_RESPONSE. success=%d",
+                                cJSON_IsNumber(js) ? js->valueint : -1);
                             if (cJSON_IsNumber(js) && js->valueint) {
                                 auth_ok = 1;
                                 cJSON* ju = cJSON_GetObjectItem(j, "userId");
                                 cJSON* jn = cJSON_GetObjectItem(j, "username");
                                 uid = ju ? ju->valueint : -1;
-                                strncpy(username, jn ? jn->valuestring : "", sizeof(username) - 1);
+                                strncpy(username, jn ? jn->valuestring : "",
+                                    sizeof(username) - 1);
                             }
                         }
                         cJSON_Delete(j);
@@ -331,9 +364,10 @@ static void atender_cliente(int sock, const char* client_ip)
             if (auth_ok && uid > 0) {
                 shm_register_user(uid, username, client_ip);
                 LOG("[HIJO-AUTH-OK] Autenticación Exitosa. uid=%d, usuario=%s", uid, username);
+                broadcast_user_online(uid, username);
             }
             else {
-                LOG("[HIJO-AUTH-FAIL] Autenticación rechazada o incompleta. uid obtenido=%d", uid);
+                LOG("[HIJO-AUTH-FAIL] Autenticación rechazada o incompleta. uid=%d", uid);
             }
             cJSON_Delete(req);
             continue;

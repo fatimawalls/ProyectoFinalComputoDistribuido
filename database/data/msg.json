@@ -108,4 +108,24 @@
 		"userId":	2,
 		"chatRoomId":	2,
 		"text":	"manejar cosas"
+	}, {
+		"id":	24,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"a"
+	}, {
+		"id":	25,
+		"userId":	1,
+		"chatRoomId":	1,
+		"text":	"hola"
+	}, {
+		"id":	26,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"asf"
+	}, {
+		"id":	27,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"a"
 	}]

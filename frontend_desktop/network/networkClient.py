@@ -4,7 +4,7 @@ networkClient.py — Cliente TCP para el servidor C (chatServerJson.c)
 Todo el estado del usuario se guarda en memoria como listas y dicts.
 No se escribe ningún archivo.
 
-Protocolo del servidor: JSON line-delimited (cada mensaje termina en \\n)
+Protocolo del servidor: JSON line-delimited (cada mensaje termina en \n)
 
 Flujo de sesión:
   1. connect()          → abre socket TCP
@@ -49,20 +49,20 @@ Callbacks que la GUI debe inyectar
 ───────────────────────────────────
 on_login_response(success: bool, message: str)
 on_register_response(success: bool, user_id: int, username: str)
-on_sync_complete()                       ← sync inicial terminó
-on_new_message(room_id, msg_dict)        ← mensaje nuevo en tiempo real
-on_user_added(room_id, user_dict)        ← alguien fue agregado a sala
-on_user_removed(room_id, user_id)        ← alguien fue removido de sala
-on_room_created(room_dict)               ← sala nueva creada
-on_message_deleted(room_id, message_id) ← mensaje eliminado
-on_room_deleted(room_id)                 ← sala eliminada
+on_sync_complete()       * sync inicial terminó
+on_new_message(room_id, msg_dict)        * mensaje nuevo en tiempo real
+on_user_added(room_id, user_dict)        * alguien fue agregado a sala
+on_user_removed(room_id, user_id)        * alguien fue removido de sala
+on_room_created(room_dict)               * sala nueva creada
+on_message_deleted(room_id, message_id) * mensaje eliminado
+on_room_deleted(room_id)                 * sala eliminada
+on_user_online(user_id, username)        * usuario nuevo conectado/registrado
 on_server_disconnected()
 """
 
 import json
 import socket
 import threading
-
 
 ENCODING = "utf-8"
 
@@ -94,6 +94,7 @@ class NetworkClient:
         self.on_room_created      = None  # (room_dict)
         self.on_message_deleted   = None  # (room_id, message_id)
         self.on_room_deleted      = None  # (room_id)
+        self.on_user_online       = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
 
     # ═══════════════════════════════════════════════════════════════
@@ -101,14 +102,31 @@ class NetworkClient:
     # ═══════════════════════════════════════════════════════════════
 
     def connect(self, ip="127.0.0.1", port=5000) -> bool:
-        """Abre el socket TCP. No inicia el hilo de escucha todavía."""
+        """Abre el socket TCP y el socket UDP de escucha."""
         print(f"[RED] Conectando a {ip}:{port}...")
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((ip, port))
             self.connected = True
-            print("[RED] ¡Conexión establecida!")
+            print("[RED] ¡Conexión TCP establecida!")
             threading.Thread(target=self._listen_loop, daemon=True).start()
+
+            # --- NUEVO: HILO PARA ESCUCHAR BROADCASTS UDP ---
+            try:
+                self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # IMPORTANTE: Permite que varios clientes en la misma PC escuchen el 5001
+                self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                
+                # Escuchamos en el puerto 5001 (en todas las interfaces "")
+                self.udp_socket.bind(("", 5001))
+                threading.Thread(target=self._udp_listen_loop, daemon=True).start()
+                print("[RED] ¡Escuchando Broadcasts UDP en el puerto 5001!")
+            except Exception as udp_e:
+                print(f"[RED] Advertencia UDP: No se pudo iniciar la escucha: {udp_e}")
+            # ------------------------------------------------
+
             return True
         except Exception as e:
             print(f"[RED] Error al conectar: {e}")
@@ -118,7 +136,15 @@ class NetworkClient:
     def disconnect(self):
         self.connected = False
         try:
-            self.socket.close()
+            if self.socket:
+                self.socket.close()
+        except Exception:
+            pass
+            
+        # NUEVO: Cerramos también UDP
+        try:
+            if hasattr(self, 'udp_socket') and self.udp_socket:
+                self.udp_socket.close()
         except Exception:
             pass
 
@@ -127,7 +153,7 @@ class NetworkClient:
     # ═══════════════════════════════════════════════════════════════
 
     def _send(self, obj: dict):
-        """Serializa un dict como JSON y lo envía con \\n final."""
+        """Serializa un dict como JSON y lo envía con \n final."""
         if not self.connected:
             print("[RED] Error: no conectado.")
             return
@@ -248,6 +274,24 @@ class NetworkClient:
         if self.on_server_disconnected:
             self.on_server_disconnected()
 
+    def _udp_listen_loop(self):
+        """Escucha mensajes de Broadcast UDP en segundo plano."""
+        while self.connected and hasattr(self, 'udp_socket') and self.udp_socket:
+            try:
+                # Esperamos recibir un datagrama UDP (máx 4096 bytes)
+                data, addr = self.udp_socket.recvfrom(4096)
+                raw_msg = data.decode(ENCODING).strip()
+                
+                if raw_msg:
+                    print(f"[RED-UDP] 📢 Broadcast recibido de {addr}: {raw_msg}")
+                    # El mensaje ya viene en formato JSON completo ("USER_ONLINE")
+                    # Se lo pasamos al despachador igual que si viniera por TCP
+                    self._dispatch(raw_msg)
+            except Exception as e:
+                if self.connected:
+                    print(f"[RED-UDP] Error de escucha UDP: {e}")
+                break
+
     def _process_buffer(self):
         """Extrae líneas completas del buffer y las despacha."""
         while "\n" in self._buf:
@@ -271,19 +315,20 @@ class NetworkClient:
         print(f"[RED] ← RECV {msg_type}")
 
         handlers = {
-            "AUTH_RESPONSE":           self._on_auth_response,
-            "CREATE_ACCOUNT_RESPONSE": self._on_register_response,
-            "SYNC_START":              self._on_sync_start,
-            "SYNC_END":                self._on_sync_end,
-            "CHATROOM":                self._on_sync_chatroom,
-            "CHAT_USER":               self._on_sync_chat_user,
-            "MESSAGE":                 self._on_sync_message,
-            "NEW_MESSAGE_RESPONSE":    self._on_new_message_response,
-            "NEW_CHATROOM_RESPONSE":   self._on_new_chatroom_response,
-            "ADD_USER_RESPONSE":       self._on_add_user_response,
-            "REMOVE_USER_RESPONSE":    self._on_remove_user_response,
-            "DELETE_MESSAGE_RESPONSE": self._on_delete_message_response,
-            "DELETE_CHATROOM_RESPONSE":self._on_delete_chatroom_response,
+            "AUTH_RESPONSE":            self._on_auth_response,
+            "CREATE_ACCOUNT_RESPONSE":  self._on_register_response,
+            "SYNC_START":               self._on_sync_start,
+            "SYNC_END":                 self._on_sync_end,
+            "CHATROOM":                 self._on_sync_chatroom,
+            "CHAT_USER":                self._on_sync_chat_user,
+            "MESSAGE":                  self._on_sync_message,
+            "NEW_MESSAGE_RESPONSE":     self._on_new_message_response,
+            "NEW_CHATROOM_RESPONSE":    self._on_new_chatroom_response,
+            "ADD_USER_RESPONSE":        self._on_add_user_response,
+            "REMOVE_USER_RESPONSE":     self._on_remove_user_response,
+            "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
+            "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
+            "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico
         }
 
         handler = handlers.get(msg_type)
@@ -321,13 +366,6 @@ class NetworkClient:
 
     # ═══════════════════════════════════════════════════════════════
     # HANDLERS — SYNC INICIAL
-    # El servidor envía exactamente:
-    #   SYNC_START
-    #   CHATROOM  (para cada sala del usuario)
-    #   CHAT_USER (para cada miembro de esa sala)
-    #   MESSAGE   (para cada mensaje de esa sala)
-    #   ...siguiente sala...
-    #   SYNC_END
     # ═══════════════════════════════════════════════════════════════
 
     def _on_sync_start(self, obj: dict):
@@ -339,7 +377,6 @@ class NetworkClient:
         self._current_sync_room = None
 
     def _on_sync_chatroom(self, obj: dict):
-        """Un CHATROOM durante el sync define la sala actual para los siguientes CHAT_USER y MESSAGE."""
         if not self._syncing:
             return
         room_id = obj["id"]
@@ -355,7 +392,6 @@ class NetworkClient:
         print(f"[RED]   SYNC sala #{room_id}: {obj.get('name')}")
 
     def _on_sync_chat_user(self, obj: dict):
-        """Un CHAT_USER durante el sync registra al usuario en self.users."""
         if not self._syncing:
             return
         user_id = obj["id"]
@@ -366,7 +402,6 @@ class NetworkClient:
         print(f"[RED]   SYNC usuario #{user_id}: {obj.get('name')}")
 
     def _on_sync_message(self, obj: dict):
-        """Un MESSAGE durante el sync se añade al historial de la sala actual."""
         if not self._syncing or self._current_sync_room is None:
             return
         room_id = obj.get("chatRoomId", self._current_sync_room)
@@ -392,16 +427,27 @@ class NetworkClient:
 
     # ═══════════════════════════════════════════════════════════════
     # HANDLERS — EVENTOS EN TIEMPO REAL
-    # Estos llegan como broadcasts cuando otros usuarios hacen cosas.
-    # La respuesta lleva notifyUsers: [id1, id2, ...] — el servidor
-    # la manda a todos los afectados, incluido el remitente.
     # ═══════════════════════════════════════════════════════════════
 
+    def _on_user_online(self, obj: dict):
+        """
+        Llega como un evento push dinámico cuando un usuario inicia sesión 
+        o se registra de forma global en la plataforma.
+        """
+        user_id = obj.get("userId")
+        username = obj.get("username")
+        
+        if user_id and username:
+            # Lo agregamos al diccionario global de usuarios si no está registrado previamente
+            if user_id not in self.users:
+                self.users[user_id] = {"id": user_id, "name": username}
+                print(f"[RED] Nuevo usuario conectado/registrado en el server: {username} (#{user_id})")
+            
+            # Disparamos el callback hacia el Controlador de la Interfaz
+            if self.on_user_online:
+                self.on_user_online(user_id, username)
+
     def _on_new_message_response(self, obj: dict):
-        """
-        Llega cuando alguien (incluyendo yo) manda un mensaje.
-        Actualiza self.messages en memoria y dispara on_new_message.
-        """
         if not obj.get("success"):
             return
         msg_data    = obj.get("message", {})
@@ -418,10 +464,6 @@ class NetworkClient:
             self.on_new_message(room_id, msg)
 
     def _on_new_chatroom_response(self, obj: dict):
-        """
-        Llega cuando se crea una sala nueva.
-        La agrega a self.rooms.
-        """
         if not obj.get("success"):
             return
         cr = obj.get("chatRoom", {})
@@ -440,24 +482,18 @@ class NetworkClient:
             self.on_room_created(room)
 
     def _on_add_user_response(self, obj: dict):
-        """
-        Llega cuando alguien es agregado a una sala.
-        Actualiza self.rooms[room_id]["userIds"] y self.users.
-        """
         if not obj.get("success"):
             return
         room_id = obj.get("chatRoomId")
         user_id = obj.get("userId")
         chat_user = obj.get("chatUser", {})
 
-        # Registrar usuario si es nuevo
         if user_id and chat_user:
             self.users[user_id] = {
                 "id":   user_id,
                 "name": chat_user.get("username", ""),
             }
 
-        # Agregar a la sala en memoria
         room = self.rooms.get(room_id)
         if room and user_id and user_id not in room["userIds"]:
             room["userIds"].append(user_id)
@@ -467,10 +503,6 @@ class NetworkClient:
             self.on_user_added(room_id, self.users.get(user_id, {"id": user_id}))
 
     def _on_remove_user_response(self, obj: dict):
-        """
-        Llega cuando alguien es removido de una sala.
-        Lo elimina de self.rooms[room_id]["userIds"].
-        """
         if not obj.get("success"):
             return
         room_id = obj.get("chatRoomId")
@@ -483,10 +515,6 @@ class NetworkClient:
             self.on_user_removed(room_id, user_id)
 
     def _on_delete_message_response(self, obj: dict):
-        """
-        Llega cuando se elimina un mensaje.
-        Lo borra del historial en memoria.
-        """
         if not obj.get("success"):
             return
         message_id = obj.get("messageId")
@@ -500,10 +528,6 @@ class NetworkClient:
                     return
 
     def _on_delete_chatroom_response(self, obj: dict):
-        """
-        Llega cuando se elimina una sala.
-        La borra de self.rooms y self.messages.
-        """
         if not obj.get("success"):
             return
         room_id = obj.get("chatRoomId")
@@ -514,13 +538,10 @@ class NetworkClient:
             self.on_room_deleted(room_id)
 
     # ─────────────────────────────────────────────────────────────
-    # MÉTODOS DE PETICIÓN (Basados en handbookRequestDB.txt)
+    # MÉTODOS DE PETICIÓN
     # ─────────────────────────────────────────────────────────────
 
     def remove_user(self, chat_room_id: int, user_id: int):
-        """
-        Petición para expulsar a un usuario de una sala.
-        """
         payload = {
             "type": "REMOVE_USER",
             "chatRoomId": chat_room_id,
@@ -529,9 +550,6 @@ class NetworkClient:
         self._send(payload)
 
     def delete_chatroom(self, chat_room_id: int):
-        """
-        Petición para eliminar una sala de chat completa.
-        """
         payload = {
             "type": "DELETE_CHATROOM",
             "chatRoomId": chat_room_id
@@ -539,9 +557,6 @@ class NetworkClient:
         self._send(payload)
 
     def delete_message(self, message_id: int):
-        """
-        Petición para eliminar un mensaje específico.
-        """
         payload = {
             "type": "DELETE_MESSAGE",
             "messageId": message_id
@@ -549,9 +564,6 @@ class NetworkClient:
         self._send(payload)
 
     def create_account(self, username, password):
-        """
-        Petición para crear una cuenta nueva.
-        """
         payload = {
             "type": "CREATE_ACCOUNT",
             "username": username,

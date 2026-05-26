@@ -200,5 +200,32 @@ class AppController:
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Valores por defecto
+    server_ip = C_SERVER_IP
+    server_port = C_SERVER_PORT
+
+    # Si se pasan argumentos por consola: python AppController.py <IP> <PUERTO>
+    if len(sys.argv) > 1:
+        server_ip = sys.argv[1]
+    if len(sys.argv) > 2:
+        try:
+            server_port = int(sys.argv[2])
+        except ValueError:
+            print(f"[ERROR] El puerto '{sys.argv[2]}' debe ser un número entero. Usando por defecto: {server_port}")
+
+    print(f"[CONTROLADOR] Configurado para conectar a {server_ip}:{server_port}")
+    
+    # Instanciamos el controlador y sobreescribimos las constantes con los argumentos
     controller = AppController()
+    
+    # Modificamos la llamada de conexión en el flujo para usar estas variables dinámicas
+    # Nota: Asegúrate de que en los métodos de AppController donde llamas a self.network.connect(...) 
+    # le pases (server_ip, server_port) en lugar de las constantes fijas.
+    
+    # Para asegurar que se usen en el login/registro, podemos guardar estos datos en el controlador:
+    controller.server_ip = server_ip
+    controller.server_port = server_port
+
     controller.run()

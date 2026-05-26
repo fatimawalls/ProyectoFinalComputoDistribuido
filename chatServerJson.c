@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/mman.h>
+#include <ifaddrs.h>
 
 #include "cJSON.h"
 
@@ -40,6 +41,9 @@
 #define DB_PORT       8080
 #define MAX_USERS     64
 #define BUFSIZE       65536   /* grande: el sync puede ser largo */
+
+char g_db_host[256] = DB_HOST;
+int  g_db_port = DB_PORT;
 
        /* ============================================================
           SHARED MEMORY — usuarios conectados (para UDP push)
@@ -93,15 +97,15 @@ static void send_line(int fd, const char* s)
 
 static int db_request(const char* req_json, char* out_buf, int out_size)
 {
-    LOG("[DB-REQ] Conectando a database_server en %s:%d...", DB_HOST, DB_PORT);
+    LOG("[DB-REQ] Conectando a database_server en %s:%d...", g_db_host, g_db_port);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { perror("db socket"); return -1; }
 
     struct sockaddr_in db_addr;
     memset(&db_addr, 0, sizeof(db_addr));
     db_addr.sin_family = AF_INET;
-    db_addr.sin_port = htons(DB_PORT);
-    inet_pton(AF_INET, DB_HOST, &db_addr.sin_addr);
+    db_addr.sin_port = htons(g_db_port);
+    inet_pton(AF_INET, g_db_host, &db_addr.sin_addr);
 
     if (connect(fd, (struct sockaddr*)&db_addr, sizeof(db_addr)) < 0) {
         perror("db connect");
@@ -411,7 +415,7 @@ static void* hilo_udp(void* arg)
    ============================================================ */
 static int db_ping(void)
 {
-    LOG("[DB-PING] Probando conexión a %s:%d ...", DB_HOST, DB_PORT);
+    LOG("[DB-PING] Probando conexión a %s:%d ...", g_db_host, g_db_port);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         LOG("[DB-PING] ERROR: no se pudo crear socket de prueba");
@@ -426,18 +430,18 @@ static int db_ping(void)
     struct sockaddr_in db_addr;
     memset(&db_addr, 0, sizeof(db_addr));
     db_addr.sin_family = AF_INET;
-    db_addr.sin_port = htons(DB_PORT);
-    inet_pton(AF_INET, DB_HOST, &db_addr.sin_addr);
+    db_addr.sin_port = htons(g_db_port);
+    inet_pton(AF_INET, g_db_host, &db_addr.sin_addr);
 
     if (connect(fd, (struct sockaddr*)&db_addr, sizeof(db_addr)) < 0) {
         perror("[DB-PING] connect");
-        LOG("[DB-PING] ✗ FALLO — database_server NO alcanzable en %s:%d", DB_HOST, DB_PORT);
+        LOG("[DB-PING] ✗ FALLO — database_server NO alcanzable en %s:%d", g_db_host, g_db_port);
         close(fd);
         return 0;
     }
 
     close(fd);
-    LOG("[DB-PING] ✓ OK — database_server alcanzable en %s:%d", DB_HOST, DB_PORT);
+    LOG("[DB-PING] ✓ OK — database_server alcanzable en %s:%d", g_db_host, g_db_port);
     return 1;
 }
 
@@ -456,14 +460,23 @@ static void sig_int(int s) {
 /* ============================================================
    MAIN
    ============================================================ */
-int main(void)
-{
-    LOG("[PADRE] Iniciando Proxy ChatServer. Apuntando a DB en %s:%d", DB_HOST, DB_PORT);
+   /* ============================================================
+      MAIN
+      ============================================================ */
+int main(int argc, char* argv[]) {
+    // Procesar argumentos de consola para la base de datos
+    if (argc > 1) {
+        strncpy(g_db_host, argv[1], sizeof(g_db_host) - 1);
+    }
+    if (argc > 2) {
+        g_db_port = atoi(argv[2]);
+    }
+
+    LOG("[PADRE] Configuración DB -> Servidor: %s, Puerto: %d", g_db_host, g_db_port);
+    LOG("[PADRE] Iniciando Proxy ChatServer. Apuntando a DB en %s:%d", g_db_host, g_db_port);
 
     g_state = mmap(NULL, sizeof(SharedState),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (g_state == MAP_FAILED) { perror("mmap"); exit(1); }
-    memset(g_state, 0, sizeof(SharedState));
 
     pthread_mutexattr_t mattr;
     pthread_mutexattr_init(&mattr);
@@ -509,7 +522,33 @@ int main(void)
         LOG("[PADRE] El servidor seguirá corriendo pero los clientes fallarán hasta que la DB esté disponible.");
     }
 
-    LOG("[PADRE] Servidor escuchando en TCP:%d y listo para enviar UDP:%d", TCP_PORT, UDP_PORT);
+    // --- NUEVA SECCIÓN: AUTO-DETECTAR LA IP REAL DEL CHAT SERVER ---
+    char realIP[64] = "0.0.0.0";
+    struct ifaddrs* interfaces = NULL;
+    struct ifaddrs* temp_addr = NULL;
+
+    if (getifaddrs(&interfaces) == 0) {
+        temp_addr = interfaces;
+        while (temp_addr != NULL) {
+            if (temp_addr->ifa_addr != NULL && temp_addr->ifa_addr->sa_family == AF_INET) {
+                char* ip = inet_ntoa(((struct sockaddr_in*)temp_addr->ifa_addr)->sin_addr);
+                // Ignoramos localhost para obtener la IP de la red de Docker
+                if (strcmp(ip, "127.0.0.1") != 0) {
+                    strcpy(realIP, ip);
+                    break;
+                }
+            }
+            temp_addr = temp_addr->ifa_next;
+        }
+        freeifaddrs(interfaces);
+    }
+
+    LOG("==================================================");
+    LOG(" CHAT SERVER INICIADO EXITOSAMENTE");
+    LOG(" Dirección IP del Servidor : %s", realIP);
+    LOG(" Escuchando clientes TCP   : %d", TCP_PORT);
+    LOG(" Listo para UDP            : %d", UDP_PORT);
+    LOG("==================================================");
 
     while (1) {
         struct sockaddr_in ca;

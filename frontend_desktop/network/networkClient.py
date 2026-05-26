@@ -512,3 +512,49 @@ class NetworkClient:
         print(f"[RED] Sala #{room_id} eliminada de memoria")
         if self.on_room_deleted:
             self.on_room_deleted(room_id)
+
+    # ─────────────────────────────────────────────────────────────
+    # MÉTODOS DE PETICIÓN (Basados en handbookRequestDB.txt)
+    # ─────────────────────────────────────────────────────────────
+
+    def remove_user(self, chat_room_id: int, user_id: int):
+        """
+        Petición para expulsar a un usuario de una sala.
+        """
+        payload = {
+            "type": "REMOVE_USER",
+            "chatRoomId": chat_room_id,
+            "userId": user_id
+        }
+        self._send(payload)
+
+    def delete_chatroom(self, chat_room_id: int):
+        """
+        Petición para eliminar una sala de chat completa.
+        """
+        payload = {
+            "type": "DELETE_CHATROOM",
+            "chatRoomId": chat_room_id
+        }
+        self._send(payload)
+
+    def delete_message(self, message_id: int):
+        """
+        Petición para eliminar un mensaje específico.
+        """
+        payload = {
+            "type": "DELETE_MESSAGE",
+            "messageId": message_id
+        }
+        self._send(payload)
+
+    def create_account(self, username, password):
+        """
+        Petición para crear una cuenta nueva.
+        """
+        payload = {
+            "type": "CREATE_ACCOUNT",
+            "username": username,
+            "password": password
+        }
+        self._send(payload)

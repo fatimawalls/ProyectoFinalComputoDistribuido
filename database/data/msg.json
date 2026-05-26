@@ -68,4 +68,34 @@
 		"userId":	2,
 		"chatRoomId":	16,
 		"text":	"hell yeah"
+	}, {
+		"id":	16,
+		"userId":	1,
+		"chatRoomId":	1,
+		"text":	"que onda jotos"
+	}, {
+		"id":	17,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"mensaje"
+	}, {
+		"id":	18,
+		"userId":	1,
+		"chatRoomId":	1,
+		"text":	"a"
+	}, {
+		"id":	19,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"hola a todos"
+	}, {
+		"id":	20,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"a"
+	}, {
+		"id":	21,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"dsg"
 	}]

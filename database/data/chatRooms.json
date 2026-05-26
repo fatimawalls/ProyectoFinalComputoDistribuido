@@ -3,13 +3,13 @@
 		"name":	"general",
 		"coordinatorId":	1,
 		"userIds":	[1],
-		"messageIds":	[1]
+		"messageIds":	[1, 16, 18]
 	}, {
 		"id":	2,
 		"name":	"general",
 		"coordinatorId":	2,
 		"userIds":	[2],
-		"messageIds":	[]
+		"messageIds":	[17, 19, 20, 21]
 	}, {
 		"id":	3,
 		"name":	"prueba2",

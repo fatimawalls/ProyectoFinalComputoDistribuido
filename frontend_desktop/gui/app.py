@@ -164,45 +164,19 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def build_ui(self):
-        # SIDEBAR
+        # ── SIDEBAR ───────────────────────────────────────────────
         self.sidebar = tk.Frame(self.root, bg=self.BG_DARK, width=260)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
+        # Logo
         header_frame = tk.Frame(self.sidebar, bg=self.BG_DARK)
         header_frame.pack(fill="x", padx=25, pady=30)
         tk.Label(header_frame, text="PIMENTEL CO.", font=self.FONT_TITLE,
                  bg=self.BG_DARK, fg=self.TEXT_MAIN, anchor="w").pack(fill="x")
+        tk.Frame(self.sidebar, bg=self.ACCENT, height=2).pack(fill="x", padx=25, pady=(0, 10))
 
-        tk.Frame(self.sidebar, bg=self.ACCENT, height=2).pack(fill="x", padx=25, pady=(0, 20))
-
-        # CHANNELS
-        channels_header = tk.Frame(self.sidebar, bg=self.BG_DARK)
-        channels_header.pack(fill="x", padx=25, pady=(10, 5))
-        tk.Label(channels_header, text="CHANNELS", font=self.FONT_UI_BOLD,
-                 bg=self.BG_DARK, fg=self.TEXT_MUTED, anchor="w").pack(side="left")
-        btn_create = tk.Label(channels_header, text="＋", font=self.FONT_UI_BOLD,
-                              bg=self.BG_DARK, fg=self.ACCENT, cursor="hand2")
-        btn_create.pack(side="right")
-        btn_create.bind("<Button-1>", lambda e: self.open_create_room_dialog())
-        btn_create.bind("<Enter>",    lambda e: btn_create.config(fg=self.ACCENT_HOVER))
-        btn_create.bind("<Leave>",    lambda e: btn_create.config(fg=self.ACCENT))
-
-        self.channels_list = tk.Listbox(self.sidebar, bg=self.BG_DARK, fg=self.TEXT_MAIN,
-                                        bd=0, highlightthickness=0,
-                                        selectbackground=self.ACCENT, selectforeground="#FFFFFF",
-                                        font=self.FONT_CODE, height=8, activestyle="none")
-        self.channels_list.pack(fill="x", padx=15)
-        self.channels_list.bind("<<ListboxSelect>>", self.on_channel_select)
-
-        # USERS (todos — online y offline)
-        tk.Label(self.sidebar, text="USERS", font=self.FONT_UI_BOLD,
-                 bg=self.BG_DARK, fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=25, pady=(25, 5))
-
-        self.users_frame = tk.Frame(self.sidebar, bg=self.BG_DARK)
-        self.users_frame.pack(fill="x", padx=15)
-
-        # PERFIL
+        # ── PERFIL (bottom, fijo) ─────────────────────────────────
         self.user_panel = tk.Frame(self.sidebar, bg=self.BG_SECONDARY, cursor="hand2")
         self.user_panel.pack(side="bottom", fill="x", padx=15, pady=15)
         self.user_label = tk.Label(self.user_panel, text=f"● {self.nickname}",
@@ -214,7 +188,73 @@ class ChatClientGUI:
         self.user_panel.bind("<Enter>", lambda e: self.user_panel.config(bg="#252525"))
         self.user_panel.bind("<Leave>", lambda e: self.user_panel.config(bg=self.BG_SECONDARY))
 
-        # MAIN PANEL
+        # ── ÁREA SCROLLABLE (channels + users) ───────────────────
+        scroll_container = tk.Frame(self.sidebar, bg=self.BG_DARK)
+        scroll_container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(scroll_container, bg=self.BG_DARK,
+                           highlightthickness=0, bd=0)
+        scrollbar = tk.Scrollbar(scroll_container, orient="vertical",
+                                 command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self._scroll_inner = tk.Frame(canvas, bg=self.BG_DARK)
+        self._scroll_win   = canvas.create_window((0, 0), window=self._scroll_inner,
+                                                   anchor="nw")
+
+        def _on_frame_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_canvas_configure(e):
+            canvas.itemconfig(self._scroll_win, width=e.width)
+
+        self._scroll_inner.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse wheel
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # ── MY CHANNELS ──────────────────────────────────────────
+        my_hdr = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
+        my_hdr.pack(fill="x", padx=15, pady=(12, 4))
+        tk.Label(my_hdr, text="MY CHANNELS", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.TEXT_MUTED, anchor="w").pack(side="left")
+        btn_create = tk.Label(my_hdr, text="＋", font=self.FONT_UI_BOLD,
+                              bg=self.BG_DARK, fg=self.ACCENT, cursor="hand2")
+        btn_create.pack(side="right")
+        btn_create.bind("<Button-1>", lambda e: self.open_create_room_dialog())
+        btn_create.bind("<Enter>",    lambda e: btn_create.config(fg=self.ACCENT_HOVER))
+        btn_create.bind("<Leave>",    lambda e: btn_create.config(fg=self.ACCENT))
+
+        self.my_rooms_frame = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
+        self.my_rooms_frame.pack(fill="x", padx=8, pady=(0, 4))
+
+        # ── OTHER CHANNELS ───────────────────────────────────────
+        tk.Frame(self._scroll_inner, bg="#2A2A2A", height=1).pack(fill="x", padx=15, pady=(8, 0))
+        other_hdr = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
+        other_hdr.pack(fill="x", padx=15, pady=(8, 4))
+        tk.Label(other_hdr, text="OTHER CHANNELS", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.TEXT_MUTED, anchor="w").pack(side="left")
+
+        self.other_rooms_frame = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
+        self.other_rooms_frame.pack(fill="x", padx=8, pady=(0, 4))
+
+        # ── USERS ────────────────────────────────────────────────
+        tk.Frame(self._scroll_inner, bg="#2A2A2A", height=1).pack(fill="x", padx=15, pady=(8, 0))
+        tk.Label(self._scroll_inner, text="CONNECTED USERS", font=self.FONT_LABEL,
+                 bg=self.BG_DARK, fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=15, pady=(8, 4))
+
+        self.users_frame = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
+        self.users_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+        # Keep legacy attribute for compatibility
+        self.channels_list = None
+
+        # ── MAIN PANEL ───────────────────────────────────────────
         self.main_panel = tk.Frame(self.root, bg=self.BG_MAIN)
         self.main_panel.pack(side="right", fill="both", expand=True)
 
@@ -289,29 +329,104 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def refresh_sidebar(self):
-        # Channels — solo los rooms del usuario actual
-        self.channels_list.delete(0, tk.END)
-        self._sidebar_rooms = self._get_my_rooms()   # guardamos para on_channel_select
-        for room in self._sidebar_rooms:
-            notif = room.get("notifications", 0)
-            label = f" # {room['name']}"
-            if notif > 0:
-                label += f"  [{notif}]"
-            self.channels_list.insert(tk.END, label)
+        # ── MY ROOMS ─────────────────────────────────────────────
+        for w in self.my_rooms_frame.winfo_children():
+            w.destroy()
 
-        # USERS — todos con dots de color
-        for widget in self.users_frame.winfo_children():
-            widget.destroy()
+        my_rooms    = self._get_my_rooms()
+        other_rooms = [r for r in self._get_all_rooms()
+                       if r.get("id") not in {m.get("id") for m in my_rooms}]
 
-        for user in self._get_all_users():
-            row = tk.Frame(self.users_frame, bg=self.BG_SECONDARY, pady=3)
-            row.pack(fill="x", pady=2, padx=2)
+        self._sidebar_rooms = my_rooms   # kept for legacy on_channel_select fallback
 
-            dot_color = self.SUCCESS_COLOR if user["online"] else self.TEXT_MUTED
-            tk.Label(row, text="●", font=self.FONT_UI_BOLD,
-                     bg=self.BG_SECONDARY, fg=dot_color).pack(side="left", padx=(8, 4))
-            tk.Label(row, text=user["nickname"], font=self.FONT_UI,
-                     bg=self.BG_SECONDARY, fg=self.TEXT_MAIN).pack(side="left")
+        if my_rooms:
+            for room in my_rooms:
+                self._make_room_row(self.my_rooms_frame, room, member=True)
+        else:
+            tk.Label(self.my_rooms_frame, text="  No channels yet.",
+                     font=self.FONT_SMALL, bg=self.BG_DARK,
+                     fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=8, pady=4)
+
+        # ── OTHER ROOMS ──────────────────────────────────────────
+        for w in self.other_rooms_frame.winfo_children():
+            w.destroy()
+
+        if other_rooms:
+            for room in other_rooms:
+                self._make_room_row(self.other_rooms_frame, room, member=False)
+        else:
+            tk.Label(self.other_rooms_frame, text="  No other channels.",
+                     font=self.FONT_SMALL, bg=self.BG_DARK,
+                     fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=8, pady=4)
+
+        # ── USERS ────────────────────────────────────────────────
+        for w in self.users_frame.winfo_children():
+            w.destroy()
+
+        users = self._get_all_users()
+        if users:
+            for user in users:
+                row = tk.Frame(self.users_frame, bg=self.BG_DARK)
+                row.pack(fill="x", pady=1)
+                dot_color = self.SUCCESS_COLOR if user.get("online") else self.TEXT_MUTED
+                tk.Label(row, text="●", font=("Segoe UI", 8),
+                         bg=self.BG_DARK, fg=dot_color).pack(side="left", padx=(8, 4))
+                tk.Label(row, text=user["nickname"], font=self.FONT_SMALL,
+                         bg=self.BG_DARK, fg=self.TEXT_MAIN).pack(side="left")
+        else:
+            tk.Label(self.users_frame, text="  No other users online.",
+                     font=self.FONT_SMALL, bg=self.BG_DARK,
+                     fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=8, pady=4)
+
+    def _make_room_row(self, parent, room, member: bool):
+        """Renders a single room row button in the sidebar."""
+        room_id = room.get("id")
+        notif   = room.get("notifications", 0)
+        name    = room.get("name", str(room_id))
+
+        is_active = (room_id == self.current_room)
+
+        bg_normal  = "#1C2340" if member else self.BG_DARK
+        bg_active  = self.ACCENT
+        bg_hover   = "#252560" if member else "#222222"
+        fg_normal  = self.TEXT_MAIN if member else self.TEXT_MUTED
+        fg_active  = "#FFFFFF"
+
+        bg = bg_active if is_active else bg_normal
+        fg = fg_active if is_active else fg_normal
+
+        row = tk.Frame(parent, bg=bg, cursor="hand2")
+        row.pack(fill="x", pady=1)
+
+        # hash prefix
+        tk.Label(row, text="#", font=self.FONT_LABEL,
+                 bg=bg, fg=self.ACCENT if not is_active else "#FFFFFF").pack(side="left", padx=(8, 2), pady=6)
+
+        lbl = tk.Label(row, text=name, font=self.FONT_SMALL,
+                       bg=bg, fg=fg, anchor="w")
+        lbl.pack(side="left", fill="x", expand=True, pady=6)
+
+        if notif > 0:
+            badge = tk.Label(row, text=str(notif), font=("Segoe UI", 8, "bold"),
+                             bg=self.ERROR_COLOR, fg="#FFFFFF", padx=5, pady=1)
+            badge.pack(side="right", padx=6)
+
+        # Click handler
+        def _click(e, rid=room_id, is_mem=member):
+            self.current_room = rid
+            if is_mem:
+                self.show_chat_view(rid)
+                room["notifications"] = 0
+            else:
+                self.show_private_room_view(rid)
+            self.refresh_sidebar()
+
+        for widget in (row, lbl):
+            widget.bind("<Button-1>", _click)
+            widget.bind("<Enter>",    lambda e, r=row, bh=bg_hover, ba=bg_active, act=is_active:
+                                          r.config(bg=bh if not act else ba))
+            widget.bind("<Leave>",    lambda e, r=row, bn=bg_normal, ba=bg_active, act=is_active:
+                                          r.config(bg=ba if act else bn))
 
     # ─────────────────────────────────────────────
     #  TOASTS
@@ -372,10 +487,11 @@ class ChatClientGUI:
 
     def _toast_click(self, toast, room_id):
         self._close_toast(toast)
-        room = self.mock.get_room(room_id)
-        if room and self.username in room["members"]:
+        if self._is_member(room_id):
             self.current_room = room_id
-            room["notifications"] = 0
+            room = self._get_room(room_id)
+            if room:
+                room["notifications"] = 0
             self.show_chat_view(room_id)
             self.refresh_sidebar()
 
@@ -638,64 +754,52 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def open_members_panel(self, room_id):
-        room = self.mock.get_room(room_id)
+        room = self._get_room(room_id)
         if not room:
+            print(f"[GUI ERROR] No se encontró la sala {room_id} para abrir panel de miembros.")
             return
 
         panel = tk.Toplevel(self.root)
         panel.title(f"MEMBERS // {room['name'].upper()}")
-        panel.geometry("360x420")
-        panel.resizable(False, False)
-        panel.configure(bg=self.BG_MAIN)
+        panel.geometry("400x500")
+        panel.configure(bg=self.BG_DARK)
         panel.transient(self.root)
         panel.grab_set()
-        panel.focus_force()
 
-        # Header
-        header = tk.Frame(panel, bg=self.BG_MAIN)
-        header.pack(fill="x", padx=30, pady=(30, 0))
+        tk.Label(panel, text=f"MIEMBROS DE #{room['name']}", font=self.FONT_TITLE,
+                 bg=self.BG_DARK, fg=self.TEXT_MAIN).pack(pady=15)
 
-        tk.Label(header, text=f"# {room['name']}", font=self.FONT_TITLE,
-                 bg=self.BG_MAIN, fg=self.TEXT_MAIN, anchor="w").pack(fill="x")
-        tk.Label(header, text=f"{len(room['members'])} member(s)", font=self.FONT_CODE,
-                 bg=self.BG_MAIN, fg=self.TEXT_MUTED, anchor="w").pack(fill="x", pady=(4, 0))
+        list_frame = tk.Frame(panel, bg=self.BG_MAIN, padx=5, pady=5)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-        tk.Frame(panel, bg=self.ACCENT, height=2).pack(fill="x", padx=30, pady=(15, 0))
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
 
-        form = tk.Frame(panel, bg=self.BG_MAIN, padx=30)
-        form.pack(fill="both", expand=True, pady=15)
+        lb = tk.Listbox(list_frame, font=self.FONT_CODE, bg=self.BG_MAIN, fg=self.TEXT_MAIN,
+                        selectbackground=self.ACCENT, selectforeground=self.TEXT_MAIN,
+                        bd=0, highlightthickness=0, yscrollcommand=scrollbar.set)
+        lb.pack(fill="both", expand=True, side="left")
+        scrollbar.config(command=lb.yview)
 
-        for username in room["members"]:
-            user      = self.mock.get_user(username)
-            nickname  = user["nickname"] if user else username
-            is_online = user["online"] if user else False
-            is_coord  = username == room["coordinator"]
+        # Determinar de dónde se extraen los miembros y mapear IDs a nombres reales del Servidor C
+        if self.network:
+            # Protocolo del handbook: {"type":"CHATROOM", "userIds":[1,2,3]}
+            # Se cruza el ID con el diccionario global de la app para extraer el alias
+            user_ids_list = room.get("userIds", [])
+            for u_id in user_ids_list:
+                # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
+                user_info = self.users.get(u_id, {}) if hasattr(self, 'users') else {}
+                user_name = user_info.get("name", "Desconocido")
+                lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
+        else:
+            members_list = self.mock.get_members(room_id)
+            for m in members_list:
+                lb.insert(tk.END, f"  • {m}")
 
-            row = tk.Frame(form, bg=self.BG_SECONDARY)
-            row.pack(fill="x", pady=3)
-
-            dot_color = self.SUCCESS_COLOR if is_online else self.TEXT_MUTED
-            tk.Label(row, text="●", font=self.FONT_UI,
-                     bg=self.BG_SECONDARY, fg=dot_color).pack(side="left", padx=(10, 4), pady=8)
-
-            label = nickname
-            if is_coord:
-                label += "  [COORD]"
-            if username == self.username:
-                label += "  (you)"
-
-            tk.Label(row, text=label, font=self.FONT_UI,
-                     bg=self.BG_SECONDARY, fg=self.TEXT_MAIN).pack(side="left", pady=8)
-
-        # Botón cerrar
-        tk.Frame(form, bg=self.BG_SECONDARY, height=1).pack(fill="x", pady=15)
-        btn_close = tk.Label(form, text="CLOSE", font=self.FONT_LABEL,
-                             bg=self.BG_SECONDARY, fg=self.TEXT_MAIN,
-                             cursor="hand2", padx=20, pady=8)
-        btn_close.pack(side="right")
-        btn_close.bind("<Button-1>", lambda e: panel.destroy())
-        btn_close.bind("<Enter>",    lambda e: btn_close.config(bg="#252525"))
-        btn_close.bind("<Leave>",    lambda e: btn_close.config(bg=self.BG_SECONDARY))
+        btn_close = tk.Button(panel, text="CLOSE", font=self.FONT_LABEL,
+                              bg=self.BG_SECONDARY, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
+                              command=panel.destroy, bd=0)
+        btn_close.pack(fill="x", side="bottom", padx=20, pady=15, ipady=8)
 
     # ─────────────────────────────────────────────
     #  LEAVE ROOM
@@ -718,100 +822,138 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def open_coordinator_panel(self, room_id):
-        room = self.mock.get_room(room_id)
+        room = self._get_room(room_id)
+        if not room:
+            print(f"[GUI ERROR] No se encontró la sala {room_id} para gestionar como Coordinador.")
+            return
 
         panel = tk.Toplevel(self.root)
         panel.title(f"MANAGE // {room['name'].upper()}")
-        panel.geometry("440x620")
-        panel.resizable(False, False)
-        panel.configure(bg=self.BG_MAIN)
+        panel.geometry("520x580")
+        panel.configure(bg=self.BG_DARK)
         panel.transient(self.root)
         panel.grab_set()
-        panel.focus_force()
 
-        header = tk.Frame(panel, bg=self.BG_MAIN)
-        header.pack(fill="x", padx=30, pady=(30, 0))
-        tk.Label(header, text=f"# {room['name']}", font=self.FONT_TITLE,
-                 bg=self.BG_MAIN, fg=self.TEXT_MAIN, anchor="w").pack(fill="x")
-        tk.Label(header, text="Coordinator Panel", font=self.FONT_CODE,
-                 bg=self.BG_MAIN, fg=self.TEXT_MUTED, anchor="w").pack(fill="x", pady=(4, 0))
+        tk.Label(panel, text=f"PANEL DE CONTROL // #{room['name'].upper()}", 
+                 font=self.FONT_TITLE, bg=self.BG_DARK, fg=self.ACCENT).pack(pady=15)
 
-        tk.Frame(panel, bg=self.ACCENT, height=2).pack(fill="x", padx=30, pady=(15, 0))
+        # ─── SECCIÓN A: SOLICITUDES DE INGRESO ───
+        tk.Label(panel, text="SOLICITUDES PENDIENTES", font=self.FONT_LABEL, 
+                 bg=self.BG_DARK, fg=self.WARNING_COLOR).pack(anchor="w", padx=25, pady=(10,0))
+        
+        req_frame = tk.Frame(panel, bg=self.BG_MAIN, bd=1, relief="solid")
+        req_frame.pack(fill="both", expand=True, padx=25, pady=5)
 
-        form = tk.Frame(panel, bg=self.BG_MAIN, padx=30)
-        form.pack(fill="both", expand=True, pady=15)
+        # Mapeo de solicitudes
+        requests_list = [] if self.network else self.mock.requests.get(room_id, [])
 
-        # PENDING REQUESTS
-        tk.Label(form, text="PENDING REQUESTS", font=self.FONT_LABEL,
-                 bg=self.BG_MAIN, fg=self.ACCENT).pack(anchor="w", pady=(10, 5))
-
-        requests = self.mock.get_join_requests(room_id)
-        if not requests:
-            tk.Label(form, text="No pending requests.", font=self.FONT_SMALL,
-                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(anchor="w", padx=5)
+        if not requests_list:
+            tk.Label(req_frame, text="No hay solicitudes pendientes.", font=self.FONT_UI,
+                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=30)
         else:
-            for req in requests:
-                req_frame = tk.Frame(form, bg=self.BG_SECONDARY)
-                req_frame.pack(fill="x", pady=3)
-                tk.Label(req_frame, text=f"  ● {req['nickname']}", font=self.FONT_UI,
-                         bg=self.BG_SECONDARY, fg=self.TEXT_MAIN).pack(side="left", padx=10, pady=8)
-                btn_reject = tk.Label(req_frame, text="✕", font=self.FONT_UI_BOLD,
-                                      bg=self.BG_SECONDARY, fg=self.ERROR_COLOR, cursor="hand2")
-                btn_reject.pack(side="right", padx=10)
-                btn_reject.bind("<Button-1>", lambda e, u=req["username"]: self.coord_reject(room_id, u, panel))
-                btn_accept = tk.Label(req_frame, text="✓", font=self.FONT_UI_BOLD,
-                                      bg=self.BG_SECONDARY, fg=self.SUCCESS_COLOR, cursor="hand2")
-                btn_accept.pack(side="right", padx=5)
-                btn_accept.bind("<Button-1>", lambda e, u=req["username"]: self.coord_accept(room_id, u, panel))
+            for req in requests_list:
+                r_item = tk.Frame(req_frame, bg=self.BG_MAIN, pady=4)
+                r_item.pack(fill="x", padx=10)
+                
+                # Mostrar ID y Nombre asociado según lo solicitado
+                r_id = req.get('userId', req.get('username', '?'))
+                r_name = req.get('nickname', req.get('name', 'Usuario'))
+                
+                tk.Label(r_item, text=f"• ID: {r_id} — {r_name}", font=self.FONT_UI,
+                         bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
+                
+                # Handlers lambda limpios redireccionados según el entorno de ejecución
+                def accept_action(uid=r_id):
+                    if self.network:
+                        # Estructura del Servidor C: Enviar comando de autorización
+                        self.network.send({"type": "ACCEPT_USER", "chatRoomId": int(room_id), "userId": int(uid)})
+                    else:
+                        self.mock.accept_request(room_id, uid)
+                    panel.destroy()
+                    self.open_coordinator_panel(room_id)
 
-        tk.Frame(form, bg=self.BG_SECONDARY, height=1).pack(fill="x", pady=15)
+                def reject_action(uid=r_id):
+                    if self.network:
+                        self.network.send({"type": "REJECT_USER", "chatRoomId": int(room_id), "userId": int(uid)})
+                    else:
+                        self.mock.reject_request(room_id, uid)
+                    panel.destroy()
+                    self.open_coordinator_panel(room_id)
 
-        # ALL USERS
-        tk.Label(form, text="ALL USERS", font=self.FONT_LABEL,
-                 bg=self.BG_MAIN, fg=self.ACCENT).pack(anchor="w", pady=(0, 5))
+                btn_rej = tk.Button(r_item, text="REJECT", font=self.FONT_SMALL, bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", command=reject_action)
+                btn_rej.pack(side="right", padx=2)
+                btn_acc = tk.Button(r_item, text="ACCEPT", font=self.FONT_SMALL, bg=self.SUCCESS_COLOR, fg=self.BG_DARK, relief="flat", command=accept_action)
+                btn_acc.pack(side="right", padx=2)
 
-        members   = self.mock.get_members(room_id)
-        all_users = self.mock.get_all_users()
+        # ─── SECCIÓN B: EXPULSIÓN DE MIEMBROS ───
+        tk.Label(panel, text="ELIMINAR MIEMBROS ACTUALES", font=self.FONT_LABEL, 
+                 bg=self.BG_DARK, fg=self.ERROR_COLOR).pack(anchor="w", padx=25, pady=(15,0))
+        
+        memb_frame = tk.Frame(panel, bg=self.BG_MAIN, bd=1, relief="solid")
+        memb_frame.pack(fill="both", expand=True, padx=25, pady=5)
 
-        for user in all_users:
-            user_frame = tk.Frame(form, bg=self.BG_SECONDARY)
-            user_frame.pack(fill="x", pady=3)
+        # Obtener lista segura cruzada
+        if self.network:
+            # Lista numérica extraída del protocolo C
+            raw_members = room.get("userIds", [])
+            # Convertimos a tuplas (id, nombre) para renderizar e identificar
+            display_members = []
+            for m_id in raw_members:
+                user_info = self.users.get(m_id, {}) if hasattr(self, 'users') else {}
+                m_name = user_info.get("name", "Desconocido")
+                # Evitar que el propio coordinador se liste para autoexpulsarse
+                if str(m_id) != str(self.username): 
+                    display_members.append((m_id, m_name))
+        else:
+            display_members = [(m, m) for m in self.mock.get_members(room_id) if m != self.username]
 
-            dot_color = self.SUCCESS_COLOR if user["online"] else self.TEXT_MUTED
-            tk.Label(user_frame, text="●", font=self.FONT_UI,
-                     bg=self.BG_SECONDARY, fg=dot_color).pack(side="left", padx=(10, 4), pady=8)
+        if not display_members:
+            tk.Label(memb_frame, text="No hay otros miembros en la sala.", font=self.FONT_UI,
+                     bg=self.BG_MAIN, fg=self.TEXT_MUTED).pack(pady=30)
+        else:
+            for uid, uname in display_members:
+                m_item = tk.Frame(memb_frame, bg=self.BG_MAIN, pady=4)
+                m_item.pack(fill="x", padx=10)
+                
+                # Imprimir ID y Nombre asociado
+                tk.Label(m_item, text=f"• ID: {uid} — {uname}", font=self.FONT_UI, bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
+                
+                # Función de remoción basada en el comando REMOVE_USER del Handbook
+                def kick_action(target_id=uid):
+                    if self.network:
+                        # payload del handbook: {"type":"REMOVE_USER","chatRoomId":X,"userId":Y}
+                        self.network.remove_user(room_id, user_id)
+                    else:
+                        self.mock.kick_user(room_id, target_id)
+                    panel.destroy()
+                    self.open_coordinator_panel(room_id)
 
-            label = user["nickname"]
-            if user["username"] == room["coordinator"]:
-                label += "  [COORD]"
-            tk.Label(user_frame, text=label, font=self.FONT_UI,
-                     bg=self.BG_SECONDARY, fg=self.TEXT_MAIN).pack(side="left", pady=8)
+                btn_kick = tk.Button(m_item, text="KICK", font=self.FONT_SMALL, bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", command=kick_action)
+                btn_kick.pack(side="right")
 
-            if user["username"] in members:
-                if user["username"] != self.username:
-                    btn_kick = tk.Label(user_frame, text="KICK", font=self.FONT_LABEL,
-                                        bg=self.BG_SECONDARY, fg=self.ERROR_COLOR, cursor="hand2")
-                    btn_kick.pack(side="right", padx=10)
-                    btn_kick.bind("<Button-1>", lambda e, u=user["username"]: self.coord_kick(room_id, u, panel))
-                else:
-                    tk.Label(user_frame, text="YOU", font=self.FONT_LABEL,
-                             bg=self.BG_SECONDARY, fg=self.TEXT_MUTED).pack(side="right", padx=10)
+        # ─── SECCIÓN C: PIE DE PANEL Y BORRADO TOTAL ───
+        footer_frame = tk.Frame(panel, bg=self.BG_DARK)
+        footer_frame.pack(fill="x", side="bottom", padx=25, pady=15)
+
+        def delete_room_action():
+            if self.network:
+                # payload del handbook: {"type":"DELETE_CHATROOM","chatRoomId":X}
+                self.network.delete_chatroom(room_id)
             else:
-                btn_add = tk.Label(user_frame, text="ADD", font=self.FONT_LABEL,
-                                   bg=self.BG_SECONDARY, fg=self.ACCENT, cursor="hand2")
-                btn_add.pack(side="right", padx=10)
-                btn_add.bind("<Button-1>",
-                             lambda e, u=user["username"], n=user["nickname"]: self.coord_add(room_id, u, n, panel))
-                btn_add.bind("<Enter>", lambda e, b=btn_add: b.config(fg=self.ACCENT_HOVER))
-                btn_add.bind("<Leave>", lambda e, b=btn_add: b.config(fg=self.ACCENT))
+                self.mock.delete_room(room_id)
+            panel.destroy()
+            self.update_rooms_list()  # CORRECCIÓN DE LA EXCEPCIÓN: 'refresh_rooms_ui' -> 'update_rooms_list'
 
-        tk.Frame(form, bg=self.BG_SECONDARY, height=1).pack(fill="x", pady=15)
+        btn_delete_room = tk.Button(footer_frame, text="DELETE ROOM", font=self.FONT_LABEL, 
+                                    bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
+                                    command=delete_room_action, bd=0)
+        btn_delete_room.pack(side="left", ipady=8, ipadx=10)
 
-        btn_delete = tk.Label(form, text="⚠ DELETE ROOM", font=self.FONT_LABEL,
-                              bg=self.BG_MAIN, fg=self.ERROR_COLOR, cursor="hand2")
-        btn_delete.pack(anchor="w")
-        btn_delete.bind("<Button-1>", lambda e: self.coord_delete_room(room_id, panel))
-
+        btn_close = tk.Button(footer_frame, text="CLOSE", font=self.FONT_LABEL,
+                              bg=self.BG_SECONDARY, fg=self.TEXT_MAIN, relief="flat", cursor="hand2",
+                              command=panel.destroy, bd=0)
+        btn_close.pack(side="right", ipady=8, ipadx=20)
+    
     # ─────────────────────────────────────────────
     #  ACCIONES COORDINADOR
     # ─────────────────────────────────────────────
@@ -1029,22 +1171,8 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def on_channel_select(self, event):
-        selection = self.channels_list.curselection()
-        if not selection:
-            return
-        rooms = getattr(self, "_sidebar_rooms", self._get_my_rooms())
-        if selection[0] >= len(rooms):
-            return
-        room = rooms[selection[0]]
-        room_id = room.get("id") or room.get("id")
-        self.current_room = room_id
-        # Con red real el usuario ya es miembro (solo se muestran sus rooms)
-        if self._is_member(room_id):
-            self.show_chat_view(room_id)
-        else:
-            self.show_private_room_view(room_id)
-        room["notifications"] = 0
-        self.refresh_sidebar()
+        # Navigation is now handled by _make_room_row click bindings.
+        pass
 
     # ─────────────────────────────────────────────
     #  MENSAJES

@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <ifaddrs.h>
 
 #include "request_handler.h"
 #include "login_register.h"
@@ -59,15 +60,44 @@ int main()
         return 1;
     }
 
-    if(listen(serverSocket, 10) < 0)
+    if (listen(serverSocket, 10) < 0)
     {
         perror("listen");
         close(serverSocket);
         return 1;
     }
 
-    printf("Database server listening on port %d\n", PORT);
+    // --- NUEVA SECCIÓN PARA AUTO-DETECTAR LA IP REAL ---
+    char realIP[64] = "0.0.0.0"; // IP por defecto si falla la búsqueda
+    struct ifaddrs* interfaces = NULL;
+    struct ifaddrs* temp_addr = NULL;
+
+    // Obtener la lista de interfaces de red
+    if (getifaddrs(&interfaces) == 0) {
+        temp_addr = interfaces;
+        while (temp_addr != NULL) {
+            // Buscamos interfaces IPv4 (AF_INET)
+            if (temp_addr->ifa_addr != NULL && temp_addr->ifa_addr->sa_family == AF_INET) {
+                char* ip = inet_ntoa(((struct sockaddr_in*)temp_addr->ifa_addr)->sin_addr);
+
+                // Ignoramos la interfaz local (127.0.0.1) para agarrar la de Docker (172.x.x.x)
+                if (strcmp(ip, "127.0.0.1") != 0) {
+                    strcpy(realIP, ip);
+                    break; // Encontramos la IP, salimos del ciclo
+                }
+            }
+            temp_addr = temp_addr->ifa_next;
+        }
+        freeifaddrs(interfaces); // Liberar memoria
+    }
+
+    printf("==================================================\n");
+    printf(" DATABASE SERVER INICIADO\n");
+    printf(" Dirección IP : %s\n", realIP);
+    printf(" Puerto        : %d\n", ntohs(serverAddr.sin_port));
+    printf("==================================================\n");
     fflush(stdout);
+
 
     while(1)
     {

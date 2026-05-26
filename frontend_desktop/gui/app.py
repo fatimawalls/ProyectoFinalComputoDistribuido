@@ -9,7 +9,7 @@ SIM_ROOM_NAMES = ["ops-team", "security", "backend", "qa-testing", "design", "in
 
 
 class ChatClientGUI:
-    def __init__(self, root, username="jperez_root", nickname="jperez.sys"):
+    def __init__(self, root, username="jperez_root", nickname="jperez.sys", network=None):
         self.root = root
         self.root.title("PIMENTEL CO. // WORKSPACE")
         self.root.geometry("1050x700")
@@ -43,14 +43,16 @@ class ChatClientGUI:
         self.active_toasts = []
         self.sim_left      = {}   # {room_id: set de nicknames que salieron en simulación}
 
-        # MockServer simula el backend
-        # AQUÍ IRÍA: self.network = NetworkClient(); self.network.connect(IP, PORT)
-        self.mock = MockServer(current_user=username, current_nick=nickname)
+        # MockServer simula el backend (fallback cuando no hay red real)
+        self.mock    = MockServer(current_user=username, current_nick=nickname)
+        self.network = network   # puede ser None; AppController también lo inyecta post-init
 
         self.root.configure(bg=self.BG_MAIN)
         self.build_ui()
 
-        # Iniciar simulaciones
+        # Iniciar simulaciones solo si NO hay red real.
+        # Si hay red real, AppController conecta self.network ANTES de que estos
+        # timers disparen, así que la primera llamada verá self.network y no hará nada.
         self._simulate_incoming_messages()
         self._simulate_user_leave()
         self._simulate_room_creation()
@@ -220,24 +222,88 @@ class ChatClientGUI:
         self.show_welcome_view()
 
     # ─────────────────────────────────────────────
+    #  ADAPTADORES RED / MOCK
+    #  Cuando self.network está disponible usa datos
+    #  reales; si no, cae al MockServer.
+    # ─────────────────────────────────────────────
+
+    def _get_my_rooms(self):
+        """Rooms a los que pertenece el usuario actual."""
+        if self.network:
+            return self.network.get_my_rooms()
+        return self.mock.get_my_rooms()
+
+    def _get_all_rooms(self):
+        """Todos los rooms conocidos (para sidebar completa)."""
+        if self.network:
+            return list(self.network.rooms.values())
+        return self.mock.get_rooms()
+
+    def _get_room(self, room_id):
+        if self.network:
+            return self.network.rooms.get(room_id)
+        return self.mock.get_room(room_id)
+
+    def _get_messages(self, room_id):
+        if self.network:
+            return [
+                (self._resolve_username(m["userId"]), m["text"])
+                for m in self.network.messages.get(room_id, [])
+            ]
+        return self.mock.get_messages(room_id)
+
+    def _resolve_username(self, user_id):
+        """Convierte user_id (int) → nombre visible."""
+        if self.network:
+            u = self.network.users.get(user_id)
+            if u:
+                return u.get("name", str(user_id))
+        return str(user_id)
+
+    def _is_coordinator(self, room_id):
+        if self.network:
+            room = self.network.rooms.get(room_id)
+            return room and room.get("coordinatorId") == self.network.me.get("id")
+        return self.mock.is_coordinator(room_id)
+
+    def _get_all_users(self):
+        if self.network:
+            my_id = self.network.me.get("id")
+            return [
+                {"username": str(u["id"]), "nickname": u.get("name", "?"), "online": True}
+                for u in self.network.users.values()
+                if u["id"] != my_id
+            ]
+        return self.mock.get_all_users()
+
+    def _is_member(self, room_id):
+        if self.network:
+            room = self.network.rooms.get(room_id)
+            my_id = self.network.me.get("id")
+            return room and my_id in room.get("userIds", [])
+        room = self.mock.get_room(room_id)
+        return room and self.username in room.get("members", [])
+
+    # ─────────────────────────────────────────────
     #  REFRESH SIDEBAR
     # ─────────────────────────────────────────────
 
     def refresh_sidebar(self):
-        # Channels
+        # Channels — solo los rooms del usuario actual
         self.channels_list.delete(0, tk.END)
-        for room in self.mock.get_rooms():
-            notif = room["notifications"]
+        self._sidebar_rooms = self._get_my_rooms()   # guardamos para on_channel_select
+        for room in self._sidebar_rooms:
+            notif = room.get("notifications", 0)
             label = f" # {room['name']}"
             if notif > 0:
                 label += f"  [{notif}]"
             self.channels_list.insert(tk.END, label)
 
-        # USERS — todos (online y offline) con dots de color
+        # USERS — todos con dots de color
         for widget in self.users_frame.winfo_children():
             widget.destroy()
 
-        for user in self.mock.get_all_users():
+        for user in self._get_all_users():
             row = tk.Frame(self.users_frame, bg=self.BG_SECONDARY, pady=3)
             row.pack(fill="x", pady=2, padx=2)
 
@@ -318,6 +384,8 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def _simulate_incoming_messages(self):
+        if self.network:   # red real → no simular
+            return
         # AQUÍ IRÍA: el hilo de escucha real del NetworkClient
         my_rooms = self.mock.get_my_rooms()
         if my_rooms:
@@ -347,6 +415,8 @@ class ChatClientGUI:
         self.root.after(12000, self._simulate_incoming_messages)
 
     def _simulate_user_leave(self):
+        if self.network:
+            return
         # AQUÍ IRÍA: el evento real del servidor vía NetworkClient
         my_rooms = self.mock.get_my_rooms()
         if my_rooms:
@@ -383,6 +453,8 @@ class ChatClientGUI:
         self.root.after(30000, self._simulate_user_leave)
 
     def _simulate_room_creation(self):
+        if self.network:
+            return
         # Simula que otro usuario crea una sala nueva
         # AQUÍ IRÍA: el servidor notificaría este evento a todos los clientes conectados
         existing_names = [r["name"] for r in self.mock.rooms]
@@ -434,7 +506,7 @@ class ChatClientGUI:
     def show_private_room_view(self, room_id):
         self.clear_main_panel()
         self.current_room = room_id
-        room       = self.mock.get_room(room_id)
+        room       = self._get_room(room_id)
         is_pending = room_id in self.pending_rooms
 
         frame = tk.Frame(self.main_panel, bg=self.BG_MAIN)
@@ -464,8 +536,8 @@ class ChatClientGUI:
     def show_chat_view(self, room_id):
         self.clear_main_panel()
         self.current_room = room_id
-        room     = self.mock.get_room(room_id)
-        is_coord = self.mock.is_coordinator(room_id)
+        room     = self._get_room(room_id)
+        is_coord = self._is_coordinator(room_id)
 
         # CABECERA
         header = tk.Frame(self.main_panel, bg=self.BG_MAIN, pady=20)
@@ -475,7 +547,7 @@ class ChatClientGUI:
                  bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
 
         if is_coord:
-            requests_count = len(self.mock.get_join_requests(room_id))
+            requests_count = len(self.mock.get_join_requests(room_id)) if not self.network else 0
             manage_text    = "⚙ Manage Room" + (f"  [{requests_count}]" if requests_count > 0 else "")
             btn_manage = tk.Label(header, text=manage_text, font=self.FONT_UI_BOLD,
                                   bg=self.BG_MAIN, fg=self.ACCENT, cursor="hand2")
@@ -550,7 +622,7 @@ class ChatClientGUI:
         self.chat_history.insert(tk.END, "◆ Connected to node.\n", "system")
         self.chat_history.config(state="disabled")
 
-        for sender, text in self.mock.get_messages(room_id):
+        for sender, text in self._get_messages(room_id):
             self.chat_history.config(state="normal")
             if sender == "__SYSTEM__":
                 self.chat_history.insert(tk.END, f"◆ {text}\n", "system")
@@ -797,6 +869,77 @@ class ChatClientGUI:
             panel.grab_set()
 
     # ─────────────────────────────────────────────
+    #  CALLBACKS EN TIEMPO REAL (NetworkClient)
+    #  AppController los inyecta tras __init__.
+    # ─────────────────────────────────────────────
+
+    def on_new_message(self, room_id, msg_dict):
+        """Llega cuando el servidor hace push de un mensaje nuevo."""
+        sender = self._resolve_username(msg_dict.get("userId"))
+        text   = msg_dict.get("text", "")
+        if room_id == self.current_room and self.chat_history:
+            self.chat_history.config(state="normal")
+            self.chat_history.insert(tk.END, f"[{sender}] ", "user")
+            self.chat_history.insert(tk.END, f"{text}\n", "msg")
+            self.chat_history.config(state="disabled")
+            self.chat_history.yview(tk.END)
+        else:
+            # Notificación en sidebar
+            if self.network:
+                room = self.network.rooms.get(room_id)
+                if room:
+                    room["notifications"] = room.get("notifications", 0) + 1
+            self.refresh_sidebar()
+            room_name = (self.network.rooms.get(room_id, {}).get("name", str(room_id))
+                         if self.network else str(room_id))
+            self.show_toast(room_id, room_name, sender, text)
+
+    def on_room_created(self, room_dict):
+        """Llega cuando se crea una sala nueva (broadcast del servidor)."""
+        self.refresh_sidebar()
+
+    def on_user_added(self, room_id, user_dict):
+        """Llega cuando alguien es agregado a una sala."""
+        self.refresh_sidebar()
+        if room_id == self.current_room:
+            name = user_dict.get("name", "?")
+            if self.chat_history:
+                self.chat_history.config(state="normal")
+                self.chat_history.insert(tk.END, f"◆ {name} joined the room.\n", "system")
+                self.chat_history.config(state="disabled")
+                self.chat_history.yview(tk.END)
+
+    def on_user_removed(self, room_id, user_id):
+        """Llega cuando alguien es removido de una sala."""
+        name = self._resolve_username(user_id)
+        my_id = self.network.me.get("id") if self.network else None
+        if user_id == my_id:
+            # Nos removieron a nosotros
+            if self.current_room == room_id:
+                self.current_room = None
+                self.show_welcome_view()
+            self.refresh_sidebar()
+        else:
+            self.refresh_sidebar()
+            if room_id == self.current_room and self.chat_history:
+                self.chat_history.config(state="normal")
+                self.chat_history.insert(tk.END, f"◆ {name} was removed from the room.\n", "system")
+                self.chat_history.config(state="disabled")
+                self.chat_history.yview(tk.END)
+
+    def on_message_deleted(self, room_id, message_id):
+        """Llega cuando se elimina un mensaje (recarga historial si es la sala activa)."""
+        if room_id == self.current_room:
+            self.show_chat_view(room_id)
+
+    def on_room_deleted(self, room_id):
+        """Llega cuando se elimina una sala."""
+        if self.current_room == room_id:
+            self.current_room = None
+            self.show_welcome_view()
+        self.refresh_sidebar()
+
+    # ─────────────────────────────────────────────
     #  CREATE ROOM
     # ─────────────────────────────────────────────
 
@@ -847,12 +990,17 @@ class ChatClientGUI:
             if len(name) < 3:
                 lbl_error.config(text="◆ Room name must be at least 3 characters.")
                 return
-            room_id = name.lower().replace(" ", "-")
-            self.mock.create_room(name)
-            self.refresh_sidebar()
-            dialog.destroy()
-            self.show_chat_view(room_id)
-            self.insert_system_message(f"Room '{name}' created. You are the coordinator.")
+            if self.network:
+                self.network.create_room(name)
+                # La sala llegará vía on_room_created callback + refresh_sidebar
+                dialog.destroy()
+            else:
+                room_id = name.lower().replace(" ", "-")
+                self.mock.create_room(name)
+                self.refresh_sidebar()
+                dialog.destroy()
+                self.show_chat_view(room_id)
+                self.insert_system_message(f"Room '{name}' created. You are the coordinator.")
 
         entry_name.bind("<Return>", lambda e: do_create())
 
@@ -884,15 +1032,17 @@ class ChatClientGUI:
         selection = self.channels_list.curselection()
         if not selection:
             return
-        rooms = self.mock.get_rooms()
+        rooms = getattr(self, "_sidebar_rooms", self._get_my_rooms())
         if selection[0] >= len(rooms):
             return
         room = rooms[selection[0]]
-        self.current_room = room["id"]
-        if self.username not in room["members"]:
-            self.show_private_room_view(room["id"])
+        room_id = room.get("id") or room.get("id")
+        self.current_room = room_id
+        # Con red real el usuario ya es miembro (solo se muestran sus rooms)
+        if self._is_member(room_id):
+            self.show_chat_view(room_id)
         else:
-            self.show_chat_view(room["id"])
+            self.show_private_room_view(room_id)
         room["notifications"] = 0
         self.refresh_sidebar()
 
@@ -916,13 +1066,16 @@ class ChatClientGUI:
         msg = self.entry_msg.get().strip()
         if not msg or not self.current_room:
             return
-        # AQUÍ IRÍA: self.network.send_message(self.current_room, msg)
-        self.mock.send_message(self.current_room, msg)
-        self.chat_history.config(state="normal")
-        self.chat_history.insert(tk.END, f"[{self.nickname}] ", "user")
-        self.chat_history.insert(tk.END, f"{msg}\n", "msg")
-        self.chat_history.config(state="disabled")
-        self.chat_history.yview(tk.END)
+        if self.network:
+            self.network.send_message(self.current_room, msg)
+            # El mensaje llegará de vuelta vía on_new_message callback
+        else:
+            self.mock.send_message(self.current_room, msg)
+            self.chat_history.config(state="normal")
+            self.chat_history.insert(tk.END, f"[{self.nickname}] ", "user")
+            self.chat_history.insert(tk.END, f"{msg}\n", "msg")
+            self.chat_history.config(state="disabled")
+            self.chat_history.yview(tk.END)
         self.entry_msg.delete(0, tk.END)
 
     # ─────────────────────────────────────────────

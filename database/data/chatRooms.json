@@ -15,7 +15,7 @@
 		"name":	"prueba2",
 		"coordinatorId":	2,
 		"userIds":	[2],
-		"messageIds":	[2]
+		"messageIds":	[2, 13]
 	}, {
 		"id":	4,
 		"name":	"prueba4",
@@ -82,4 +82,10 @@
 		"coordinatorId":	10,
 		"userIds":	[10],
 		"messageIds":	[11]
+	}, {
+		"id":	16,
+		"name":	"papulandia/8",
+		"coordinatorId":	2,
+		"userIds":	[2],
+		"messageIds":	[14, 15]
 	}]

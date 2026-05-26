@@ -63,3 +63,24 @@ Within an individual room, the system supports:
 ## Constraints
 * **Distraction-Free:** No integration with external social media.
 * **Room Deletion:** Restricted to empty rooms (except for the coordinator) to prevent accidental data loss or disruption.
+
+## Contributors Sub Teams
+
+### Database:
+Heidi Meiners Muñoz  
+Fátima Sofía Walls Fernández  
+Valeria Pérez Maciel  
+
+### Frontend:
+José Eduardo Paredes Moreno  
+Carlos Jiménez Zepeda  
+
+### E-lobby (General user & Coordinator):
+Kenzo Matoo López  
+Omar Alejandro Sánchez López  
+Alberto Stephen Dubin Hernández  
+
+### Chatroom & Security:
+Álvaro Samuel Velázquez Ramírez  
+José Pablo Soto Sánchez  
+Jaime Rincón Burboa  

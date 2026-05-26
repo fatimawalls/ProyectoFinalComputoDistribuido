@@ -98,4 +98,14 @@
 		"userId":	2,
 		"chatRoomId":	2,
 		"text":	"dsg"
+	}, {
+		"id":	22,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"pase"
+	}, {
+		"id":	23,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"manejar cosas"
 	}]

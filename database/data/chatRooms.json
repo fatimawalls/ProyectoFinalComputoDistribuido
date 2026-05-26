@@ -9,7 +9,7 @@
 		"name":	"general",
 		"coordinatorId":	2,
 		"userIds":	[2],
-		"messageIds":	[17, 19, 20, 21]
+		"messageIds":	[17, 19, 20, 21, 22, 23]
 	}, {
 		"id":	3,
 		"name":	"prueba2",

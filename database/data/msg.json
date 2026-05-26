@@ -53,4 +53,19 @@
 		"userId":	10,
 		"chatRoomId":	14,
 		"text":	"hola mundo"
+	}, {
+		"id":	13,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"Hoa a prueba 2"
+	}, {
+		"id":	14,
+		"userId":	2,
+		"chatRoomId":	16,
+		"text":	"soy yo y solo yo"
+	}, {
+		"id":	15,
+		"userId":	2,
+		"chatRoomId":	16,
+		"text":	"hell yeah"
 	}]

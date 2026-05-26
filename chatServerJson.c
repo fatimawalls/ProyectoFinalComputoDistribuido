@@ -34,9 +34,9 @@
     /* ============================================================
        CONSTANTES
        ============================================================ */
-#define TCP_PORT      5000
+#define TCP_PORT      5006
 #define UDP_PORT      5001
-#define DB_HOST       "172.18.2.2"
+#define DB_HOST       "172.18.2.3"
 #define DB_PORT       8080
 #define MAX_USERS     64
 #define BUFSIZE       65536   /* grande: el sync puede ser largo */
@@ -407,6 +407,41 @@ static void* hilo_udp(void* arg)
 }
 
 /* ============================================================
+   DB PING — verifica conectividad con database_server al arrancar
+   ============================================================ */
+static int db_ping(void)
+{
+    LOG("[DB-PING] Probando conexión a %s:%d ...", DB_HOST, DB_PORT);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        LOG("[DB-PING] ERROR: no se pudo crear socket de prueba");
+        return 0;
+    }
+
+    /* Timeout de 3 segundos para el intento de conexión */
+    struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in db_addr;
+    memset(&db_addr, 0, sizeof(db_addr));
+    db_addr.sin_family = AF_INET;
+    db_addr.sin_port = htons(DB_PORT);
+    inet_pton(AF_INET, DB_HOST, &db_addr.sin_addr);
+
+    if (connect(fd, (struct sockaddr*)&db_addr, sizeof(db_addr)) < 0) {
+        perror("[DB-PING] connect");
+        LOG("[DB-PING] ✗ FALLO — database_server NO alcanzable en %s:%d", DB_HOST, DB_PORT);
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+    LOG("[DB-PING] ✓ OK — database_server alcanzable en %s:%d", DB_HOST, DB_PORT);
+    return 1;
+}
+
+/* ============================================================
    SEÑALES
    ============================================================ */
 static void sig_chld(int s) { (void)s; while (waitpid(-1, NULL, WNOHANG) > 0); }
@@ -467,6 +502,13 @@ int main(void)
 
     signal(SIGCHLD, sig_chld);
     signal(SIGINT, sig_int);
+
+    /* Verificar conectividad con la DB antes de aceptar clientes */
+    if (!db_ping()) {
+        LOG("[PADRE] ADVERTENCIA: no se pudo conectar a la DB en este momento.");
+        LOG("[PADRE] El servidor seguirá corriendo pero los clientes fallarán hasta que la DB esté disponible.");
+    }
+
     LOG("[PADRE] Servidor escuchando en TCP:%d y listo para enviar UDP:%d", TCP_PORT, UDP_PORT);
 
     while (1) {

@@ -1,4 +1,13 @@
-def cifrar_texto(texto, llave):
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Ahora puedes acceder a ellas con os.getenv()
+key = os.getenv("CYFER_KEY")
+
+def cifrar_texto(texto, llave=int(key)):
     """Desplaza cada carácter hacia adelante según la llave."""
     resultado = ""
     for caracter in texto:
@@ -6,7 +15,7 @@ def cifrar_texto(texto, llave):
         resultado += chr(nuevo_codigo)
     return resultado
 
-def descifrar_texto(texto_cifrado, llave):
+def descifrar_texto(texto_cifrado, llave=int(key)):
     """Desplaza cada carácter hacia atrás según la llave."""
     resultado = ""
     for caracter in texto_cifrado:
@@ -14,11 +23,3 @@ def descifrar_texto(texto_cifrado, llave):
         resultado += chr(nuevo_codigo)
     return resultado
 
-llave_numerica = 5
-mensaje = "¡Hola Mundo 123!"
-
-encriptado = cifrar_texto(mensaje, llave_numerica)
-print(f"Texto cifrado: {encriptado}")
-
-desencriptado = descifrar_texto(encriptado, llave_numerica)
-print(f"Texto original: {desencriptado}")

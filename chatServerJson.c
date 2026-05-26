@@ -1,4 +1,4 @@
-﻿/*
+/*
  * chatServerJson.c — Servidor de chat (proxy al database_server)
  *
  * Arquitectura:

@@ -4,7 +4,7 @@ from gui.views import LoginView, RegisterView
 from gui.app import ChatClientGUI
 from network.networkClient import NetworkClient
 
-C_SERVER_IP   = "127.0.0.1"
+C_SERVER_IP   = "192.168.68.118"
 C_SERVER_PORT = 5006
 
 

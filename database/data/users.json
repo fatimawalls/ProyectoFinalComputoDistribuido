@@ -8,4 +8,49 @@
 		"name":	"soto",
 		"password":	"soto",
 		"chatRoomsIds":	[2, 3, 4, 5, 6]
+	}, {
+		"id":	3,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[7]
+	}, {
+		"id":	4,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[8]
+	}, {
+		"id":	5,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[9]
+	}, {
+		"id":	6,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[10]
+	}, {
+		"id":	7,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[11]
+	}, {
+		"id":	8,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[12]
+	}, {
+		"id":	9,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[13]
+	}, {
+		"id":	10,
+		"name":	"juan",
+		"password":	"1234",
+		"chatRoomsIds":	[14]
+	}, {
+		"id":	11,
+		"name":	"papu",
+		"password":	"papu2",
+		"chatRoomsIds":	[]
 	}]

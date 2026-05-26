@@ -1,21 +1,10 @@
 ﻿/*
- * ChatRoomServer.c
+ * chatServerJson.c — Servidor de chat (proxy al database_server)
  *
- * Compilar:
-
-gcc ChatRoomServer.c \
-database/src/database_repository.c \
-database/src/json_utils.c \
-database/src/index_manager.c \
-database/src/memory_utils.c \
-database/src/login_register.c \
-database/src/protocol.c \
-database/libs/cJSON.c \
--Idatabase/include \
--Idatabase/libs \
--lpthread \
--o chatserver
-
+ * Arquitectura:
+ * Cliente <──TCP:5000──> chatServerJson <──TCP:8080──> database_server
+ *
+ * Versión con LOGS extendidos para depuración de respuestas JSON.
  */
 
 #include <stdio.h>
@@ -32,35 +21,40 @@ database/libs/cJSON.c \
 #include <sys/mman.h>
 
 #include "cJSON.h"
-#include "models.h"
-#include "database_repository.h"
-#include "memory_utils.h"
-#include "login_register.h"
-#include "protocol.h"
 
  /* ============================================================
-    CONSTANTES
+    LOGGER
     ============================================================ */
-#define TCP_PORT    5000
-#define UDP_PORT    5001
-#define MAX_USERS   64
-#define MAX_MEMBERS 32
-#define BUFSIZE     8192
+#define LOG(fmt, ...)                    \
+    do {                                 \
+        printf(fmt "\n", ##__VA_ARGS__); \
+        fflush(stdout);                  \
+    } while (0)
 
     /* ============================================================
-       SHARED MEMORY
+       CONSTANTES
        ============================================================ */
+#define TCP_PORT      5000
+#define UDP_PORT      5001
+#define DB_HOST       "172.18.2.2"
+#define DB_PORT       8080
+#define MAX_USERS     64
+#define BUFSIZE       65536   /* grande: el sync puede ser largo */
+
+       /* ============================================================
+          SHARED MEMORY — usuarios conectados (para UDP push)
+          ============================================================ */
 typedef struct {
     int  db_user_id;
     char username[64];
     int  active;
     char udp_ip[64];
-    int  udp_port;
+    int  udp_port;        /* 0 = sin UDP registrado aún */
 } ShmUser;
 
 typedef struct {
-    ShmUser         users[MAX_USERS];
-    int             user_count;
+    ShmUser     users[MAX_USERS];
+    int         user_count;
     pthread_mutex_t lock;
 } SharedState;
 
@@ -69,10 +63,13 @@ static int          g_tcp_sd = -1;
 static int          g_udp_sd = -1;
 
 /* ============================================================
-   RED
+   RED — leer/enviar línea terminada en '\n'
    ============================================================ */
-static int recv_line(int fd, char* buf, int maxlen) {
-    int total = 0; char c;
+
+static int recv_line(int fd, char* buf, int maxlen)
+{
+    int total = 0;
+    char c;
     while (total < maxlen - 1) {
         int n = recv(fd, &c, 1, 0);
         if (n <= 0) return n;
@@ -83,399 +80,339 @@ static int recv_line(int fd, char* buf, int maxlen) {
     return total;
 }
 
+static void send_line(int fd, const char* s)
+{
+    char buf[BUFSIZE];
+    int len = snprintf(buf, sizeof(buf), "%s\n", s);
+    send(fd, buf, len, 0);
+}
+
 /* ============================================================
-   UDP
+   DATABASE SERVER — conexión de un solo request
    ============================================================ */
-static void udp_notify(int db_user_id, const char* msg) {
+
+static int db_request(const char* req_json, char* out_buf, int out_size)
+{
+    LOG("[DB-REQ] Conectando a database_server en %s:%d...", DB_HOST, DB_PORT);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { perror("db socket"); return -1; }
+
+    struct sockaddr_in db_addr;
+    memset(&db_addr, 0, sizeof(db_addr));
+    db_addr.sin_family = AF_INET;
+    db_addr.sin_port = htons(DB_PORT);
+    inet_pton(AF_INET, DB_HOST, &db_addr.sin_addr);
+
+    if (connect(fd, (struct sockaddr*)&db_addr, sizeof(db_addr)) < 0) {
+        perror("db connect");
+        close(fd);
+        return -1;
+    }
+
+    LOG("[DB-REQ] Enviando a DB: '%s'", req_json);
+    char req_buf[BUFSIZE];
+    int req_len = snprintf(req_buf, sizeof(req_buf), "%s\n", req_json);
+    send(fd, req_buf, req_len, 0);
+
+    int total = 0;
+    int lines = 0;
+    char tmp[BUFSIZE];
+
+    while (1) {
+        int n = recv_line(fd, tmp, sizeof(tmp));
+        if (n <= 0) {
+            LOG("[DB-RESP] Fin de respuesta (Socket cerrado por DB u orden EOF)");
+            break;
+        }
+        if (tmp[0] == '\0') continue;
+
+        LOG("[DB-RESP] Línea cruda recibida de DB: '%s'", tmp);
+
+        /* Agregar al buffer de salida */
+        int needed = strlen(tmp) + 2;
+        if (total + needed >= out_size) {
+            LOG("[DB-RESP] ¡ALERTA! Buffer de salida saturado");
+            break;
+        }
+        total += snprintf(out_buf + total, out_size - total, "%s\n", tmp);
+        lines++;
+    }
+    out_buf[total] = '\0';
+    close(fd);
+
+    LOG("[DB-RESP] Total: %d líneas consolidadas del database_server", lines);
+    return lines;
+}
+
+/* ============================================================
+   UDP — notificar a usuarios conectados
+   ============================================================ */
+static void udp_notify_user(int db_user_id, const char* json_str)
+{
     pthread_mutex_lock(&g_state->lock);
     for (int i = 0; i < MAX_USERS; i++) {
         ShmUser* u = &g_state->users[i];
         if (!u->active || u->db_user_id != db_user_id || u->udp_port == 0)
             continue;
+
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
         dest.sin_port = htons(u->udp_port);
         inet_aton(u->udp_ip, &dest.sin_addr);
         pthread_mutex_unlock(&g_state->lock);
+
         char buf[BUFSIZE];
-        snprintf(buf, sizeof(buf), "%s\n", msg);
-        sendto(g_udp_sd, buf, strlen(buf), 0,
-            (struct sockaddr*)&dest, sizeof(dest));
+        int len = snprintf(buf, sizeof(buf), "%s\n", json_str);
+        sendto(g_udp_sd, buf, len, 0, (struct sockaddr*)&dest, sizeof(dest));
+        LOG("[UDP] Push a uid=%d %s:%d", db_user_id, u->udp_ip, u->udp_port);
         return;
     }
     pthread_mutex_unlock(&g_state->lock);
 }
 
-static void udp_push_to_list(const char* json_text,
-    int* ids, int count, int skip_id)
+static void udp_push_notify_users(const char* resp_json, int skip_id)
 {
-    for (int i = 0; i < count; i++)
-        if (ids[i] != skip_id)
-            udp_notify(ids[i], json_text);
+    cJSON* resp = cJSON_Parse(resp_json);
+    if (!resp) {
+        LOG("[UDP-ERR] No se pudo parsear JSON para notificación UDP: '%s'", resp_json);
+        return;
+    }
+    cJSON* arr = cJSON_GetObjectItem(resp, "notifyUsers");
+    if (cJSON_IsArray(arr)) {
+        cJSON* item = NULL;
+        cJSON_ArrayForEach(item, arr) {
+            int uid = item->valueint;
+            if (uid != skip_id)
+                udp_notify_user(uid, resp_json);
+        }
+    }
+    cJSON_Delete(resp);
 }
 
 /* ============================================================
-   AUTENTICACION + SYNC
+   REGISTRAR / LIMPIAR USUARIO EN SHARED MEMORY
    ============================================================ */
-static int autenticar(int sock, const char* client_ip,
-    char* username_out)
+static void shm_register_user(int uid, const char* uname, const char* ip)
 {
-    char buf[BUFSIZE];
+    pthread_mutex_lock(&g_state->lock);
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
+            strncpy(g_state->users[i].udp_ip, ip, sizeof(g_state->users[i].udp_ip) - 1);
+            pthread_mutex_unlock(&g_state->lock);
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (!g_state->users[i].active) {
+            ShmUser* su = &g_state->users[i];
+            memset(su, 0, sizeof(ShmUser));
+            su->db_user_id = uid;
+            su->active = 1;
+            su->udp_port = 0;
+            strncpy(su->username, uname, sizeof(su->username) - 1);
+            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
+            g_state->user_count++;
+            LOG("[SHM] Registrado uid=%d username=%s ip=%s slot=%d", uid, uname, ip, i);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_state->lock);
+}
 
-    while (1) {
-        if (recv_line(sock, buf, sizeof(buf)) <= 0) return -1;
+static void shm_unregister_user(int uid)
+{
+    pthread_mutex_lock(&g_state->lock);
+    for (int i = 0; i < MAX_USERS; i++) {
+        if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
+            memset(&g_state->users[i], 0, sizeof(ShmUser));
+            g_state->user_count--;
+            LOG("[SHM] Eliminado uid=%d", uid);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_state->lock);
+}
 
-        cJSON* req = cJSON_Parse(buf);
-        if (!req) continue;
+/* ============================================================
+   LÓGICA DEL CLIENTE — proceso hijo
+   ============================================================ */
+static void atender_cliente(int sock, const char* client_ip)
+{
+    char req_buf[BUFSIZE];
+    char resp_buf[BUFSIZE];
+    int  uid = -1;
+    char username[64] = "";
 
+    LOG("[HIJO] Atendiendo cliente desde IP: %s", client_ip);
+
+    /* ── Fase 1: Autenticación ───────────────────────────────── */
+    while (uid < 0) {
+        int n = recv_line(sock, req_buf, sizeof(req_buf));
+        if (n <= 0) {
+            LOG("[HIJO-AUTH] Cliente desconectado abruptamente en fase Auth");
+            close(sock); exit(0);
+        }
+        LOG("[HIJO-AUTH] Recibido del Cliente: '%s'", req_buf);
+
+        /* Validar estructura JSON */
+        cJSON* req = cJSON_Parse(req_buf);
+        if (!req) {
+            LOG("[HIJO-AUTH-ERR] El cliente envió algo que NO es JSON válido: '%s'", req_buf);
+            continue;
+        }
         cJSON* jtype = cJSON_GetObjectItem(req, "type");
-        if (!jtype) { cJSON_Delete(req); continue; }
+        if (!cJSON_IsString(jtype)) {
+            LOG("[HIJO-AUTH-ERR] JSON del cliente no contiene campo 'type' string");
+            cJSON_Delete(req); continue;
+        }
         const char* type = jtype->valuestring;
+        LOG("[HIJO-AUTH] Request tipo: %s", type);
 
-        /* CREATE_ACCOUNT */
+        /* Petición al Database Server */
+        int lines = db_request(req_buf, resp_buf, sizeof(resp_buf));
+        if (lines < 0) {
+            LOG("[HIJO-AUTH-ERR] Fallo crítico al comunicarse con el database_server");
+            cJSON_Delete(req);
+            close(sock); exit(1);
+        }
+
         if (strcmp(type, "CREATE_ACCOUNT") == 0) {
-            const char* uname = cJSON_GetObjectItem(req, "username")->valuestring;
-            const char* pass = cJSON_GetObjectItem(req, "password")->valuestring;
-            User u = createUser(uname, pass);
-            saveUser(&u);
-            sendCreateAccountResponse(sock, 1, u.id, u.name);
-            freeUser(&u);
+            char* line = strtok(resp_buf, "\n");
+            while (line) {
+                LOG("[HIJO-AUTH] Reenviando a cliente (CREATE_ACCOUNT_RESP): '%s'", line);
+                send_line(sock, line);
+                line = strtok(NULL, "\n");
+            }
             cJSON_Delete(req);
             continue;
         }
 
-        /* AUTH */
         if (strcmp(type, "AUTH") == 0) {
-            const char* uname = cJSON_GetObjectItem(req, "username")->valuestring;
-            const char* pass = cJSON_GetObjectItem(req, "password")->valuestring;
+            int auth_ok = 0;
+            char resp_copy[BUFSIZE];
+            strncpy(resp_copy, resp_buf, sizeof(resp_copy) - 1);
+            resp_copy[sizeof(resp_copy) - 1] = '\0';
 
-            User* user = authenticateUser(uname, pass);
-            if (!user) {
-                sendAuthResponse(sock, 0, 0, NULL);
-                cJSON_Delete(req);
-                continue;
-            }
+            char* line = strtok(resp_copy, "\n");
+            while (line) {
+                if (line[0] != '\0') {
+                    LOG("[HIJO-AUTH] Enviando línea de respuesta al cliente: '%s'", line);
+                    send_line(sock, line);
 
-            int db_id = user->id;
-            strncpy(username_out, user->name, 63);
-
-            /* Registrar en shared memory */
-            pthread_mutex_lock(&g_state->lock);
-            int slot = -1;
-            for (int i = 0; i < MAX_USERS; i++)
-                if (!g_state->users[i].active) { slot = i; break; }
-
-            if (slot == -1) {
-                pthread_mutex_unlock(&g_state->lock);
-                sendAuthResponse(sock, 0, 0, NULL);
-                freeUser(user); free(user);
-                cJSON_Delete(req);
-                continue;
-            }
-
-            ShmUser* su = &g_state->users[slot];
-            memset(su, 0, sizeof(ShmUser));
-            su->db_user_id = db_id;
-            su->active = 1;
-            strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip, client_ip, sizeof(su->udp_ip) - 1);
-            g_state->user_count++;
-            pthread_mutex_unlock(&g_state->lock);
-
-            sendAuthResponse(sock, 1, db_id, user->name);
-            freeUser(user); free(user);
-
-            /* SYNC */
-            sendSyncStart(sock);
-
-            int roomCount;
-            ChatRoom* rooms = getChatRoomsFromUser(db_id, &roomCount);
-            for (int i = 0; i < roomCount; i++) {
-                sendChatRoomJson(sock, &rooms[i]);
-
-                for (int j = 0; j < rooms[i].userCount; j++) {
-                    User* ru = getUserById(rooms[i].userIds[j]);
-                    if (ru) {
-                        sendChatUserJson(sock, ru->id, ru->name);
-                        freeUser(ru); free(ru);
+                    /* Validar si la línea que le mandamos es JSON */
+                    cJSON* j = cJSON_Parse(line);
+                    if (!j) {
+                        LOG("[HIJO-AUTH-ALERTA] ¡CUIDADO! La línea enviada NO es un JSON parseable. Contenido: '%s'", line);
+                    }
+                    else {
+                        cJSON* jt = cJSON_GetObjectItem(j, "type");
+                        cJSON* js = cJSON_GetObjectItem(j, "success");
+                        if (cJSON_IsString(jt) && strcmp(jt->valuestring, "AUTH_RESPONSE") == 0) {
+                            LOG("[HIJO-AUTH] Detectado AUTH_RESPONSE. success=%d", cJSON_IsNumber(js) ? js->valueint : -1);
+                            if (cJSON_IsNumber(js) && js->valueint) {
+                                auth_ok = 1;
+                                cJSON* ju = cJSON_GetObjectItem(j, "userId");
+                                cJSON* jn = cJSON_GetObjectItem(j, "username");
+                                uid = ju ? ju->valueint : -1;
+                                strncpy(username, jn ? jn->valuestring : "", sizeof(username) - 1);
+                            }
+                        }
+                        cJSON_Delete(j);
                     }
                 }
-
-                int msgCount;
-                Message* msgs = getMessagesFromChatRoom(rooms[i].id, &msgCount);
-                for (int j = 0; j < msgCount; j++)
-                    sendMessageJson(sock, msgs[j].id, msgs[j].userId,
-                        msgs[j].chatRoomId, msgs[j].text);
-                if (msgs) freeMessages(msgs, msgCount);
+                line = strtok(NULL, "\n");
             }
-            if (rooms) freeChatRooms(rooms, roomCount);
 
-            sendSyncEnd(sock);
-
+            if (auth_ok && uid > 0) {
+                shm_register_user(uid, username, client_ip);
+                LOG("[HIJO-AUTH-OK] Autenticación Exitosa. uid=%d, usuario=%s", uid, username);
+            }
+            else {
+                LOG("[HIJO-AUTH-FAIL] Autenticación rechazada o incompleta. uid obtenido=%d", uid);
+            }
             cJSON_Delete(req);
-            return db_id;
+            continue;
         }
 
+        LOG("[HIJO-AUTH] Tipo desconocido ignorado: %s", type);
         cJSON_Delete(req);
     }
-}
 
-/* ============================================================
-   LOBBY
-   ============================================================ */
-static void procesar_lobby(int sock, int db_user_id) {
-    char buf[BUFSIZE];
-    printf("[uid=%d] Lobby\n", db_user_id);
+    /* ── Fase 2: Sesión ──────────────────────────────────────── */
+    LOG("[HIJO-SESION] Loop de comandos activo para uid=%d (%s)", uid, username);
 
     while (1) {
-        int n = recv_line(sock, buf, sizeof(buf));
-        if (n <= 0) { printf("[uid=%d] Desconectado\n", db_user_id); break; }
-        printf("[uid=%d] %s\n", db_user_id, buf);
+        int n = recv_line(sock, req_buf, sizeof(req_buf));
+        if (n <= 0) {
+            LOG("[HIJO-SESION] Cliente desconectado (uid=%d)", uid);
+            break;
+        }
+        LOG("[HIJO-SESION] Request de uid=%d: '%s'", uid, req_buf);
 
-        cJSON* req = cJSON_Parse(buf);
-        if (!req) continue;
-
-        cJSON* jtype = cJSON_GetObjectItem(req, "type");
-        if (!jtype) { cJSON_Delete(req); continue; }
-        const char* type = jtype->valuestring;
-
-        /* ── NEW_MESSAGE ── */
-        if (strcmp(type, "NEW_MESSAGE") == 0) {
-            const char* text = cJSON_GetObjectItem(req, "text")->valuestring;
-            int userId = cJSON_GetObjectItem(req, "userId")->valueint;
-            int chatRoomId = cJSON_GetObjectItem(req, "chatRoomId")->valueint;
-
-            Message msg = createMessage(text, userId, chatRoomId);
-            saveMessage(&msg);
-
-            ChatRoom* room = getChatRoomById(chatRoomId);
-            if (!room) { freeMessage(&msg); cJSON_Delete(req); continue; }
-
-            sendNewMessageResponse(sock, 1, &msg,
-                room->userIds, room->userCount);
-
-            cJSON* push = cJSON_CreateObject();
-            cJSON_AddStringToObject(push, "type", "MESSAGE");
-            cJSON_AddNumberToObject(push, "id", msg.id);
-            cJSON_AddNumberToObject(push, "userId", msg.userId);
-            cJSON_AddNumberToObject(push, "chatRoomId", msg.chatRoomId);
-            cJSON_AddStringToObject(push, "text", msg.text);
-            char* pt = cJSON_PrintUnformatted(push);
-            cJSON_Delete(push);
-            udp_push_to_list(pt, room->userIds, room->userCount, db_user_id);
-            free(pt);
-
-            freeChatRoom(room); free(room);
-            freeMessage(&msg);
+        int lines = db_request(req_buf, resp_buf, sizeof(resp_buf));
+        if (lines < 0) {
+            LOG("[HIJO-SESION-ERR] Error de comunicación DB para uid=%d", uid);
+            break;
         }
 
-        /* ── NEW_CHATROOM ── */
-        else if (strcmp(type, "NEW_CHATROOM") == 0) {
-            const char* name = cJSON_GetObjectItem(req, "name")->valuestring;
-            int coordId = cJSON_GetObjectItem(req, "coordinatorId")->valueint;
+        char resp_copy[BUFSIZE];
+        strncpy(resp_copy, resp_buf, sizeof(resp_copy) - 1);
+        resp_copy[sizeof(resp_copy) - 1] = '\0';
 
-            ChatRoom room = createChatRoom(name, coordId);
-            saveChatRoom(&room);
+        char* line = strtok(resp_copy, "\n");
+        while (line) {
+            if (line[0] != '\0') {
+                LOG("[HIJO-SESION] Reenviando a cliente: '%s'", line);
+                send_line(sock, line);
 
-            int notify[1] = { coordId };
-            sendNewChatRoomResponse(sock, 1, &room, notify, 1);
-
-            freeChatRoom(&room);
-        }
-
-        /* ── ADD_USER ── */
-        else if (strcmp(type, "ADD_USER") == 0) {
-            int userId = cJSON_GetObjectItem(req, "userId")->valueint;
-            int chatRoomId = cJSON_GetObjectItem(req, "chatRoomId")->valueint;
-
-            ChatRoom* before = getChatRoomById(chatRoomId);
-            int notify_ids[MAX_MEMBERS]; int nc = 0;
-            if (before) {
-                nc = before->userCount;
-                for (int i = 0; i < nc; i++)
-                    notify_ids[i] = before->userIds[i];
-                freeChatRoom(before); free(before);
-            }
-
-            int success = addUserToChatRoom(userId, chatRoomId);
-            ChatRoom* room = getChatRoomById(chatRoomId);
-            User* added = getUserById(userId);
-
-            sendUserChatRelationResponse(sock, "ADD_USER_RESPONSE", success,
-                userId, chatRoomId, added,
-                room ? room->userIds : NULL,
-                room ? room->userCount : 0);
-
-            if (success && added) {
-                cJSON* push = cJSON_CreateObject();
-                cJSON_AddStringToObject(push, "type", "ADD_USER_RESPONSE");
-                cJSON_AddNumberToObject(push, "success", 1);
-                cJSON_AddNumberToObject(push, "chatRoomId", chatRoomId);
-                cJSON_AddNumberToObject(push, "userId", userId);
-                cJSON* cu = cJSON_CreateObject();
-                cJSON_AddNumberToObject(cu, "id", added->id);
-                cJSON_AddStringToObject(cu, "username", added->name);
-                cJSON_AddItemToObject(push, "chatUser", cu);
-                char* pt = cJSON_PrintUnformatted(push);
-                cJSON_Delete(push);
-                udp_push_to_list(pt, notify_ids, nc, db_user_id);
-                free(pt);
-            }
-
-            if (added) { freeUser(added); free(added); }
-            if (room) { freeChatRoom(room); free(room); }
-        }
-
-        /* ── REMOVE_USER ── */
-        else if (strcmp(type, "REMOVE_USER") == 0) {
-            int userId = cJSON_GetObjectItem(req, "userId")->valueint;
-            int chatRoomId = cJSON_GetObjectItem(req, "chatRoomId")->valueint;
-
-            ChatRoom* before = getChatRoomById(chatRoomId);
-            int notify_ids[MAX_MEMBERS]; int nc = 0;
-            if (before) {
-                nc = before->userCount;
-                for (int i = 0; i < nc; i++)
-                    notify_ids[i] = before->userIds[i];
-                freeChatRoom(before); free(before);
-            }
-
-            int success = removeUserFromChatRoom(userId, chatRoomId);
-
-            sendUserChatRelationResponse(sock, "REMOVE_USER_RESPONSE", success,
-                userId, chatRoomId, NULL,
-                notify_ids, nc);
-
-            if (success) {
-                cJSON* push = cJSON_CreateObject();
-                cJSON_AddStringToObject(push, "type", "REMOVE_USER_RESPONSE");
-                cJSON_AddNumberToObject(push, "success", 1);
-                cJSON_AddNumberToObject(push, "chatRoomId", chatRoomId);
-                cJSON_AddNumberToObject(push, "userId", userId);
-                char* pt = cJSON_PrintUnformatted(push);
-                cJSON_Delete(push);
-                udp_push_to_list(pt, notify_ids, nc, db_user_id);
-                free(pt);
-            }
-        }
-
-        /* ── DELETE_MESSAGE ── */
-        else if (strcmp(type, "DELETE_MESSAGE") == 0) {
-            int messageId = cJSON_GetObjectItem(req, "messageId")->valueint;
-
-            Message* message = getMessageById(messageId);
-            int notify_ids[MAX_MEMBERS]; int nc = 0;
-
-            if (message) {
-                ChatRoom* room = getChatRoomById(message->chatRoomId);
-                if (room) {
-                    nc = room->userCount;
-                    for (int i = 0; i < nc; i++)
-                        notify_ids[i] = room->userIds[i];
-                    freeChatRoom(room); free(room);
+                cJSON* j = cJSON_Parse(line);
+                if (j) {
+                    cJSON* arr = cJSON_GetObjectItem(j, "notifyUsers");
+                    if (cJSON_IsArray(arr)) {
+                        udp_push_notify_users(line, uid);
+                    }
+                    cJSON_Delete(j);
+                }
+                else {
+                    LOG("[HIJO-SESION-ALERTA] Línea de sesión enviada no es JSON: '%s'", line);
                 }
             }
-
-            int success = message ? deleteMessageById(messageId) : 0;
-
-            sendDeleteResponse(sock, "DELETE_MESSAGE_RESPONSE", success,
-                "messageId", messageId, notify_ids, nc);
-
-            if (success) {
-                cJSON* push = cJSON_CreateObject();
-                cJSON_AddStringToObject(push, "type", "DELETE_MESSAGE_RESPONSE");
-                cJSON_AddNumberToObject(push, "success", 1);
-                cJSON_AddNumberToObject(push, "messageId", messageId);
-                char* pt = cJSON_PrintUnformatted(push);
-                cJSON_Delete(push);
-                udp_push_to_list(pt, notify_ids, nc, db_user_id);
-                free(pt);
-            }
-
-            if (message) { freeMessage(message); free(message); }
+            line = strtok(NULL, "\n");
         }
-
-        /* ── DELETE_CHATROOM ── */
-        else if (strcmp(type, "DELETE_CHATROOM") == 0) {
-            int chatRoomId = cJSON_GetObjectItem(req, "chatRoomId")->valueint;
-
-            ChatRoom* room = getChatRoomById(chatRoomId);
-            int notify_ids[1]; int nc = 0;
-
-            int can = room &&
-                room->userCount == 1 &&
-                room->userIds[0] == room->coordinatorId;
-            if (can) { notify_ids[0] = room->coordinatorId; nc = 1; }
-            if (room) { freeChatRoom(room); free(room); }
-
-            int success = can ? deleteChatRoomById(chatRoomId) : 0;
-
-            sendDeleteResponse(sock, "DELETE_CHATROOM_RESPONSE", success,
-                "chatRoomId", chatRoomId, notify_ids, nc);
-
-            if (success) {
-                cJSON* push = cJSON_CreateObject();
-                cJSON_AddStringToObject(push, "type", "DELETE_CHATROOM_RESPONSE");
-                cJSON_AddNumberToObject(push, "success", 1);
-                cJSON_AddNumberToObject(push, "chatRoomId", chatRoomId);
-                char* pt = cJSON_PrintUnformatted(push);
-                cJSON_Delete(push);
-                udp_push_to_list(pt, notify_ids, nc, db_user_id);
-                free(pt);
-            }
-        }
-
-        cJSON_Delete(req);
     }
-}
 
-/* ============================================================
-   HIJO
-   ============================================================ */
-static void atender_cliente(int sock, const char* client_ip) {
-    char username[64] = "";
-    int uid = autenticar(sock, client_ip, username);
-    if (uid < 0) { close(sock); exit(0); }
-    printf("[uid=%d] Autenticado: %s\n", uid, username);
-
-    procesar_lobby(sock, uid);
-
-    pthread_mutex_lock(&g_state->lock);
-    for (int i = 0; i < MAX_USERS; i++)
-        if (g_state->users[i].db_user_id == uid) {
-            g_state->users[i].active = 0; break;
-        }
-    g_state->user_count--;
-    pthread_mutex_unlock(&g_state->lock);
-
+    shm_unregister_user(uid);
     close(sock);
-    printf("[uid=%d] Fin\n", uid);
+    LOG("[HIJO-CLIENTE] Finalizado por completo. uid=%d", uid);
     exit(0);
 }
 
 /* ============================================================
-   HILO UDP
+   HILO UDP — escucha notificaciones entrantes
    ============================================================ */
-static void* hilo_udp(void* arg) {
+static void* hilo_udp(void* arg)
+{
     (void)arg;
     char buf[BUFSIZE];
-    struct sockaddr_in src; socklen_t slen = sizeof(src);
-    printf("[UDP] Puerto %d\n", UDP_PORT);
+    struct sockaddr_in src;
+    socklen_t slen = sizeof(src);
+    LOG("[UDP-HILO] Escuchando activamente en puerto %d", UDP_PORT);
     while (1) {
         int n = recvfrom(g_udp_sd, buf, sizeof(buf) - 1, 0,
             (struct sockaddr*)&src, &slen);
-        if (n > 0) { buf[n] = '\0'; printf("[UDP] %s", buf); }
+        if (n > 0) { buf[n] = '\0'; LOG("[UDP-HILO] Mensaje entrante: %s", buf); }
     }
     return NULL;
 }
 
 /* ============================================================
-   SIGNALS
+   SEÑALES
    ============================================================ */
 static void sig_chld(int s) { (void)s; while (waitpid(-1, NULL, WNOHANG) > 0); }
 static void sig_int(int s) {
     (void)s;
+    LOG("[SIGNAL] Cierre por SIGINT controlado");
     if (g_tcp_sd != -1) close(g_tcp_sd);
     if (g_udp_sd != -1) close(g_udp_sd);
     exit(0);
@@ -484,7 +421,10 @@ static void sig_int(int s) {
 /* ============================================================
    MAIN
    ============================================================ */
-int main(void) {
+int main(void)
+{
+    LOG("[PADRE] Iniciando Proxy ChatServer. Apuntando a DB en %s:%d", DB_HOST, DB_PORT);
+
     g_state = mmap(NULL, sizeof(SharedState),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (g_state == MAP_FAILED) { perror("mmap"); exit(1); }
@@ -495,13 +435,14 @@ int main(void) {
     pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
     pthread_mutex_init(&g_state->lock, &mattr);
     pthread_mutexattr_destroy(&mattr);
+    LOG("[PADRE] Memoria compartida inicializada");
 
-    /* UDP */
     g_udp_sd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_sd < 0) { perror("udp socket"); exit(1); }
     struct sockaddr_in ua;
     memset(&ua, 0, sizeof(ua));
-    ua.sin_family = AF_INET; ua.sin_addr.s_addr = INADDR_ANY;
+    ua.sin_family = AF_INET;
+    ua.sin_addr.s_addr = INADDR_ANY;
     ua.sin_port = htons(UDP_PORT);
     if (bind(g_udp_sd, (struct sockaddr*)&ua, sizeof(ua)) < 0) {
         perror("udp bind"); exit(1);
@@ -510,14 +451,14 @@ int main(void) {
     pthread_create(&tid, NULL, hilo_udp, NULL);
     pthread_detach(tid);
 
-    /* TCP */
     g_tcp_sd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_tcp_sd < 0) { perror("tcp socket"); exit(1); }
     int opt = 1;
     setsockopt(g_tcp_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in ta;
     memset(&ta, 0, sizeof(ta));
-    ta.sin_family = AF_INET; ta.sin_addr.s_addr = INADDR_ANY;
+    ta.sin_family = AF_INET;
+    ta.sin_addr.s_addr = INADDR_ANY;
     ta.sin_port = htons(TCP_PORT);
     if (bind(g_tcp_sd, (struct sockaddr*)&ta, sizeof(ta)) < 0) {
         perror("tcp bind"); exit(1);
@@ -526,23 +467,25 @@ int main(void) {
 
     signal(SIGCHLD, sig_chld);
     signal(SIGINT, sig_int);
-
-    printf("[Servidor] TCP:%d  UDP:%d\n", TCP_PORT, UDP_PORT);
+    LOG("[PADRE] Servidor escuchando en TCP:%d y listo para enviar UDP:%d", TCP_PORT, UDP_PORT);
 
     while (1) {
-        struct sockaddr_in ca; socklen_t clen = sizeof(ca);
+        struct sockaddr_in ca;
+        socklen_t clen = sizeof(ca);
         int cfd = accept(g_tcp_sd, (struct sockaddr*)&ca, &clen);
         if (cfd < 0) { perror("accept"); continue; }
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &ca.sin_addr, ip, sizeof(ip));
-        printf("[Padre] Conexion de %s\n", ip);
+        LOG("[PADRE] Nueva conexión entrante desde TCP %s", ip);
 
         pid_t pid = fork();
         if (pid < 0) { perror("fork"); close(cfd); continue; }
-        if (pid == 0) { close(g_tcp_sd); atender_cliente(cfd, ip); }
+        if (pid == 0) {
+            close(g_tcp_sd);
+            atender_cliente(cfd, ip);
+        }
         close(cfd);
     }
-
     return 0;
 }

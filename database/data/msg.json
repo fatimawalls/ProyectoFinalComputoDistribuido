@@ -13,4 +13,44 @@
 		"userId":	2,
 		"chatRoomId":	6,
 		"text":	"prueba a ver si se manda"
+	}, {
+		"id":	4,
+		"userId":	3,
+		"chatRoomId":	7,
+		"text":	"hola mundo"
+	}, {
+		"id":	5,
+		"userId":	4,
+		"chatRoomId":	8,
+		"text":	"hola mundo"
+	}, {
+		"id":	6,
+		"userId":	5,
+		"chatRoomId":	9,
+		"text":	"hola mundo"
+	}, {
+		"id":	7,
+		"userId":	6,
+		"chatRoomId":	10,
+		"text":	"hola mundo"
+	}, {
+		"id":	8,
+		"userId":	7,
+		"chatRoomId":	11,
+		"text":	"hola mundo"
+	}, {
+		"id":	9,
+		"userId":	8,
+		"chatRoomId":	12,
+		"text":	"hola mundo"
+	}, {
+		"id":	10,
+		"userId":	9,
+		"chatRoomId":	13,
+		"text":	"hola mundo"
+	}, {
+		"id":	11,
+		"userId":	10,
+		"chatRoomId":	14,
+		"text":	"hola mundo"
 	}]

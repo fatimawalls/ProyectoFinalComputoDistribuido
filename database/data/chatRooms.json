@@ -34,4 +34,52 @@
 		"coordinatorId":	2,
 		"userIds":	[2],
 		"messageIds":	[3]
+	}, {
+		"id":	7,
+		"name":	"general",
+		"coordinatorId":	3,
+		"userIds":	[3],
+		"messageIds":	[4]
+	}, {
+		"id":	8,
+		"name":	"general",
+		"coordinatorId":	4,
+		"userIds":	[4],
+		"messageIds":	[5]
+	}, {
+		"id":	9,
+		"name":	"general",
+		"coordinatorId":	5,
+		"userIds":	[5],
+		"messageIds":	[6]
+	}, {
+		"id":	10,
+		"name":	"general",
+		"coordinatorId":	6,
+		"userIds":	[6],
+		"messageIds":	[7]
+	}, {
+		"id":	11,
+		"name":	"general",
+		"coordinatorId":	7,
+		"userIds":	[7],
+		"messageIds":	[8]
+	}, {
+		"id":	12,
+		"name":	"general",
+		"coordinatorId":	8,
+		"userIds":	[8],
+		"messageIds":	[9]
+	}, {
+		"id":	13,
+		"name":	"general",
+		"coordinatorId":	9,
+		"userIds":	[9],
+		"messageIds":	[10]
+	}, {
+		"id":	14,
+		"name":	"general",
+		"coordinatorId":	10,
+		"userIds":	[10],
+		"messageIds":	[11]
 	}]

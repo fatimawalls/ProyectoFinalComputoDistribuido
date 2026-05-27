@@ -522,6 +522,59 @@ void handleDeleteChatRoom(
         notifyCount
     );
 }
+void handleJoinRequest(
+    int clientSocket,
+    cJSON *request
+)
+{
+    cJSON *userIdJson     = cJSON_GetObjectItem(request, "userId");
+    cJSON *chatRoomIdJson = cJSON_GetObjectItem(request, "chatRoomId");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "type", "JOIN_REQUEST_RESPONSE");
+
+    if (!userIdJson || !chatRoomIdJson)
+    {
+        cJSON_AddNumberToObject(resp, "success", 0);
+        sendJson(clientSocket, resp);
+        cJSON_Delete(resp);
+        return;
+    }
+
+    int userId     = userIdJson->valueint;
+    int chatRoomId = chatRoomIdJson->valueint;
+
+    ChatRoom *room = getChatRoomById(chatRoomId);
+    if (!room)
+    {
+        cJSON_AddNumberToObject(resp, "success", 0);
+        cJSON_AddNumberToObject(resp, "chatRoomId", chatRoomId);
+        sendJson(clientSocket, resp);
+        cJSON_Delete(resp);
+        return;
+    }
+
+    User *requester = getUserById(userId);
+
+    cJSON_AddNumberToObject(resp, "success",     1);
+    cJSON_AddNumberToObject(resp, "chatRoomId",  chatRoomId);
+    cJSON_AddNumberToObject(resp, "requesterId", userId);
+    if (requester)
+        cJSON_AddStringToObject(resp, "requesterName", requester->name);
+
+    /* notifyUsers: [coordinatorId] — el servidor C lo broadcastea via UDP */
+    cJSON *notifyArr = cJSON_CreateArray();
+    cJSON_AddItemToArray(notifyArr, cJSON_CreateNumber(room->coordinatorId));
+    cJSON_AddItemToObject(resp, "notifyUsers", notifyArr);
+
+    sendJson(clientSocket, resp);
+    cJSON_Delete(resp);
+
+    if (requester) { freeUser(requester); free(requester); }
+    freeChatRoom(room);
+    free(room);
+}
+
 void handleRequest(
     int clientSocket,
     const char *requestText
@@ -619,6 +672,13 @@ void handleRequest(
     else if(strcmp(type, "DELETE_CHATROOM") == 0)
     {
         handleDeleteChatRoom(
+            clientSocket,
+            request
+        );
+    }
+    else if(strcmp(type, "JOIN_REQUEST") == 0)
+    {
+        handleJoinRequest(
             clientSocket,
             request
         );

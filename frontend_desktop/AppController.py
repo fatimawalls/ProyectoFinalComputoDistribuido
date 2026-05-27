@@ -111,14 +111,16 @@ class AppController:
         self._app = app
 
         # Conectar callbacks en tiempo real de mensajería hacia la GUI
-        self.network.on_new_message         = getattr(app, "on_new_message",     None)
-        self.network.on_room_created        = getattr(app, "on_room_created",    None)
-        self.network.on_user_added          = getattr(app, "on_user_added",      None)
-        self.network.on_user_removed        = getattr(app, "on_user_removed",    None)
-        self.network.on_message_deleted     = getattr(app, "on_message_deleted", None)
-        self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
-        self.network.on_server_disconnected = self.on_server_disconnected
-        self.network.on_user_offline        = self.on_user_offline_received
+        self.network.on_new_message             = getattr(app, "on_new_message",          None)
+        self.network.on_room_created            = getattr(app, "on_room_created",         None)
+        self.network.on_user_added              = getattr(app, "on_user_added",           None)
+        self.network.on_user_removed            = getattr(app, "on_user_removed",         None)
+        self.network.on_message_deleted         = getattr(app, "on_message_deleted",      None)
+        self.network.on_room_deleted            = getattr(app, "on_room_deleted",         None)
+        self.network.on_join_request_sent       = getattr(app, "on_join_request_sent",    None)
+        self.network.on_join_request_received   = getattr(app, "on_join_request_received",None)
+        self.network.on_server_disconnected     = self.on_server_disconnected
+        self.network.on_user_offline            = self.on_user_offline_received
 
     # ─────────────────────────────────────────────────────────────
     # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)

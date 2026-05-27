@@ -304,13 +304,13 @@ function requestJoinRoom() {
     socket.emit('request_join', { room_id: activeRoom });
 }
 
-socket.on('join_request_result', data => {
-    if (data.success) {
+socket.on('join_requested', data => {
+    if (data.status === 'ok') {
         pendingRooms.add(data.room_id);
         document.getElementById('private-not-requested').style.display = 'none';
         document.getElementById('private-pending').style.display       = 'block';
     } else {
-        customInfo('WARNING', 'Could not send join request.', 'var(--warning)');
+        customInfo('WARNING', data.message || 'Could not send join request.', 'var(--warning)');
     }
 });
 

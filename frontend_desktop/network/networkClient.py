@@ -101,6 +101,11 @@ class NetworkClient:
         self.on_room_deleted      = None  # (room_id)
         self.on_user_online       = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
+        self.on_join_request_sent     = None  # (room_id, success) — confirmación al solicitante
+        self.on_join_request_received = None  # (room_id, requester_id, requester_name) — al coordinador
+
+        # Solicitudes de ingreso pendientes que el coordinador ha recibido
+        self.pending_join_requests: dict[int, list] = {}  # {room_id: [{requesterId, requesterName}]}
 
         # La base de datos local es la fuente de verdad del cliente.
         # Estos dicts se mantienen como espejo de compatibilidad para la GUI vieja.
@@ -283,6 +288,22 @@ class NetworkClient:
             "chatRoomId": room_id,
         })
 
+    def leave_room(self, room_id: int):
+        """El usuario actual sale voluntariamente de una sala."""
+        self._send({
+            "type":       "REMOVE_USER",
+            "userId":     self.me.get("id"),
+            "chatRoomId": room_id,
+        })
+
+    def request_join_room(self, chat_room_id: int):
+        """Solicita unirse a una sala; la respuesta activa on_join_request_sent."""
+        self._send({
+            "type":       "JOIN_REQUEST",
+            "chatRoomId": chat_room_id,
+            "userId":     self.me.get("id"),
+        })
+
     def delete_message(self, message_id: int):
         """Elimina un mensaje por ID."""
         self._send({
@@ -398,8 +419,8 @@ class NetworkClient:
             "REMOVE_USER_RESPONSE":     self._on_remove_user_response,
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
-            "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico
-          
+            "USER_ONLINE":              self._on_user_online,
+            "JOIN_REQUEST_RESPONSE":    self._on_join_request_response,
         }
 
         handler = handlers.get(msg_type)
@@ -612,6 +633,28 @@ class NetworkClient:
 
         if self.on_room_deleted:
             self.on_room_deleted(room_id)
+
+    def _on_join_request_response(self, obj: dict):
+        success        = bool(obj.get("success"))
+        room_id        = obj.get("chatRoomId")
+        requester_id   = obj.get("requesterId")
+        requester_name = obj.get("requesterName", f"User_{requester_id}")
+        my_id          = self.me.get("id")
+
+        if requester_id == my_id:
+            # Soy el solicitante — confirmación del servidor
+            print(f"[RED] Join request {'enviada' if success else 'fallida'} para sala #{room_id}")
+            if self.on_join_request_sent:
+                self.on_join_request_sent(room_id, success)
+        else:
+            # Soy el coordinador — alguien quiere entrar
+            self.pending_join_requests.setdefault(room_id, []).append({
+                "requesterId":   requester_id,
+                "requesterName": requester_name,
+            })
+            print(f"[RED] Solicitud de ingreso: {requester_name} (#{requester_id}) → sala #{room_id}")
+            if self.on_join_request_received:
+                self.on_join_request_received(room_id, requester_id, requester_name)
 
     # ─────────────────────────────────────────────────────────────
     # MÉTODOS DE PETICIÓN

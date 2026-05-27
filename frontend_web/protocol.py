@@ -311,7 +311,8 @@ class ProtocolDispatcher:
         # Solo acuse de recibo; la aprobación real llega como EVT_JOIN_APPROVED
         self.sio.emit("join_requested",
                       {"room_id": p.get("room_id"),
-                       "message": p.get("message")}, to=sid)
+                       "message": p.get("message"),
+                       "status":  status}, to=sid)
 
     def _on_leave_room(self, sid, status, p):
         self.sio.emit("room_left", {"room_id": p.get("room_id")}, to=sid)

@@ -144,11 +144,18 @@ def dictToFriend(data: dict) -> Friend:
 
 
 def dictToChat(data: dict) -> ChatRoom:
+    user_ids = list(data.get("userIds", []))
+
+    coordinator_id = data["coordinatorId"]
+
+    if coordinator_id not in user_ids:
+        user_ids.append(coordinator_id)
+
     return ChatRoom(
         id=data["id"],
         name=descifrar_texto(data["name"]),
-        coordinatorId=data["coordinatorId"],
-        userIds=list(data.get("userIds", [])),
+        coordinatorId=coordinator_id,
+        userIds=user_ids,
         messageIds=list(data.get("messageIds", [])),
         unreadCount=data.get("unreadCount", 0)
     )

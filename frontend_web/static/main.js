@@ -106,22 +106,20 @@ socket.on('login_error', data => {
 
 document.getElementById('btn-register').onclick = () => {
     const user    = document.getElementById('reg-user').value.trim();
-    const nick    = document.getElementById('reg-nick').value.trim();
     const pass    = document.getElementById('reg-pass').value;
     const confirm = document.getElementById('reg-confirm').value;
     const err     = document.getElementById('reg-error');
 
-    if (!user)           { err.innerText = "◆ Username cannot be empty.";                return; }
-    if (user.length < 3) { err.innerText = "◆ Username must be at least 3 characters.";  return; }
-    if (!nick)           { err.innerText = "◆ Display name cannot be empty.";            return; }
-    if (!pass)           { err.innerText = "◆ Password cannot be empty.";                return; }
-    if (pass.length < 6) { err.innerText = "◆ Password must be at least 6 characters."; return; }
-    if (pass !== confirm) { err.innerText = "◆ Passwords do not match."; document.getElementById('reg-confirm').value = ''; return; }
+    if (!user)            { err.innerText = "◆ Username cannot be empty.";                return; }
+    if (user.length < 3)  { err.innerText = "◆ Username must be at least 3 characters.";  return; }
+    if (!pass)            { err.innerText = "◆ Password cannot be empty.";                return; }
+    if (pass.length < 6)  { err.innerText = "◆ Password must be at least 6 characters."; return; }
+    if (pass !== confirm)  { err.innerText = "◆ Passwords do not match."; document.getElementById('reg-confirm').value = ''; return; }
     err.innerText = "";
-    socket.emit('register', { username: user, nickname: nick, password: pass });
+    socket.emit('register', { username: user, password: pass });
 };
 
-['reg-user','reg-nick','reg-pass','reg-confirm'].forEach((id, i, arr) => {
+['reg-user','reg-pass','reg-confirm'].forEach((id, i, arr) => {
     document.getElementById(id).addEventListener('keypress', e => {
         if (e.key === 'Enter') {
             if (i < arr.length - 1) document.getElementById(arr[i + 1]).focus();
@@ -131,7 +129,7 @@ document.getElementById('btn-register').onclick = () => {
 });
 
 socket.on('register_success', data => {
-    customInfo('ACCOUNT CREATED', `Welcome, ${data.nickname}. You can now sign in.`);
+    customInfo('ACCOUNT CREATED', `Welcome, ${data.username}. You can now sign in.`);
     switchView('login-view');
 });
 

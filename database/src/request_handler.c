@@ -55,11 +55,37 @@ void handleAuth(
 
     sendSyncStart(clientSocket);
 
-    int roomCount;
+    /*
+        Full database sync.
+
+        Antes:
+            Solo se mandaban los chatrooms relacionados al usuario.
+
+        Ahora:
+            Se mandan todos los usuarios, todos los chatrooms
+            y todos los mensajes.
+    */
+
+    int userCount = 0;
+
+    User *users =
+        getAllUsers(
+            &userCount
+        );
+
+    for(int i = 0; i < userCount; i++)
+    {
+        sendChatUserJson(
+            clientSocket,
+            users[i].id,
+            users[i].name
+        );
+    }
+
+    int roomCount = 0;
 
     ChatRoom *rooms =
-        getChatRoomsFromUser(
-            user->id,
+        getAllChatRooms(
             &roomCount
         );
 
@@ -69,53 +95,54 @@ void handleAuth(
             clientSocket,
             &rooms[i]
         );
+    }
 
-        /*
-            Send users in room
-        */
+    int msgCount = 0;
 
-        for(int j = 0; j < rooms[i].userCount; j++)
-        {
-            User *roomUser =
-                getUserById(
-                    rooms[i].userIds[j]
-                );
+    Message *messages =
+        getAllMessages(
+            &msgCount
+        );
 
-            if(roomUser)
-            {
-                sendChatUserJson(
-                    clientSocket,
-                    roomUser->id,
-                    roomUser->name
-                );
-            }
-        }
-
-        /*
-            Send messages
-        */
-
-        int msgCount;
-
-        Message *messages =
-            getMessagesFromChatRoom(
-                rooms[i].id,
-                &msgCount
-            );
-
-        for(int j = 0; j < msgCount; j++)
-        {
-            sendMessageJson(
-                clientSocket,
-                messages[j].id,
-                messages[j].userId,
-                messages[j].chatRoomId,
-                messages[j].text
-            );
-        }
+    for(int i = 0; i < msgCount; i++)
+    {
+        sendMessageJson(
+            clientSocket,
+            messages[i].id,
+            messages[i].userId,
+            messages[i].chatRoomId,
+            messages[i].text
+        );
     }
 
     sendSyncEnd(clientSocket);
+
+    if(users)
+    {
+        freeUsers(
+            users,
+            userCount
+        );
+    }
+
+    if(rooms)
+    {
+        freeChatRooms(
+            rooms,
+            roomCount
+        );
+    }
+
+    if(messages)
+    {
+        freeMessages(
+            messages,
+            msgCount
+        );
+    }
+
+    freeUser(user);
+    free(user);
 }
 
 void handleCreateAccount(
@@ -495,45 +522,6 @@ void handleDeleteChatRoom(
         notifyCount
     );
 }
-
-void handleGetUsers(int clientSocket)
-{
-    int count;
-    User* users = getAllUsers(&count);
-
-    for (int i = 0; i < count; i++) {
-        sendChatUserJson(clientSocket, users[i].id, users[i].name);
-    }
-
-    /* Señal de fin — reutilizamos SYNC_END o un tipo propio */
-    cJSON* end = cJSON_CreateObject();
-    cJSON_AddStringToObject(end, "type", "GET_USERS_END");
-    sendJson(clientSocket, end);
-    cJSON_Delete(end);
-
-    freeUsers(users, count);
-}
-
-void handleGetRooms(int clientSocket)
-{
-    int count;
-    ChatRoom* rooms = getAllChatRooms(&count);
-
-    for (int i = 0; i < count; i++) {
-        sendChatRoomJson(clientSocket, &rooms[i]);
-    }
-
-    cJSON* end = cJSON_CreateObject();
-    cJSON_AddStringToObject(end, "type", "GET_ROOMS_END");
-    sendJson(clientSocket, end);
-    cJSON_Delete(end);
-
-    freeChatRooms(rooms, count);
-}
-
-
-
-
 void handleRequest(
     int clientSocket,
     const char *requestText
@@ -634,15 +622,6 @@ void handleRequest(
             clientSocket,
             request
         );
-    }
-
-    else if (strcmp(type, "GET_USERS") == 0)
-    {
-        handleGetUsers(clientSocket);
-    }
-    else if (strcmp(type, "GET_ROOMS") == 0)
-    {
-        handleGetRooms(clientSocket);
     }
 
     cJSON_Delete(request);

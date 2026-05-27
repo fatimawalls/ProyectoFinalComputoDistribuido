@@ -96,6 +96,7 @@ class NetworkClient:
         self.on_room_deleted      = None  # (room_id)
         self.on_user_online       = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
+        
 
     # ═══════════════════════════════════════════════════════════════
     # CONEXIÓN
@@ -147,6 +148,23 @@ class NetworkClient:
                 self.udp_socket.close()
         except Exception:
             pass
+
+    def request_all_users(self):
+        """Solicita al servidor la lista global de todos los usuarios registrados."""
+        payload = {
+            "type": "GET_USERS"
+        }
+        print("[RED] → Solicitando catálogo global de usuarios (GET_USERS)")
+        self._send(payload)
+
+    def request_all_rooms(self):
+        """Solicita al servidor la lista global de todas las salas de chat disponibles."""
+        payload = {
+            "type": "GET_ROOMS"
+        }
+        print("[RED] → Solicitando catálogo global de salas (GET_ROOMS)")
+        self._send(payload)
+
 
     # ═══════════════════════════════════════════════════════════════
     # ENVÍOS AL SERVIDOR
@@ -251,6 +269,16 @@ class NetworkClient:
         room = self.rooms.get(room_id)
         return room is not None and room.get("coordinatorId") == self.me.get("id")
 
+    def _on_get_users_end(self, obj: dict):
+        print(f"[RED] GET_USERS completo — {len(self.users)} usuarios totales")
+        if self.on_all_users_loaded:
+            self.on_all_users_loaded()
+
+    def _on_get_rooms_end(self, obj: dict):
+        print(f"[RED] GET_ROOMS completo — {len(self.rooms)} salas totales")
+        if self.on_all_rooms_loaded:
+            self.on_all_rooms_loaded()
+
     # ═══════════════════════════════════════════════════════════════
     # HILO DE ESCUCHA TCP
     # ═══════════════════════════════════════════════════════════════
@@ -319,8 +347,10 @@ class NetworkClient:
             "CREATE_ACCOUNT_RESPONSE":  self._on_register_response,
             "SYNC_START":               self._on_sync_start,
             "SYNC_END":                 self._on_sync_end,
-            "CHATROOM":                 self._on_sync_chatroom,
-            "CHAT_USER":                self._on_sync_chat_user,
+            "GET_USERS_END":  self._on_get_users_end,
+            "GET_ROOMS_END":  self._on_get_rooms_end,
+            "CHAT_USER":      self._on_sync_chat_user,   
+            "CHATROOM":       self._on_sync_chatroom,     
             "MESSAGE":                  self._on_sync_message,
             "NEW_MESSAGE_RESPONSE":     self._on_new_message_response,
             "NEW_CHATROOM_RESPONSE":    self._on_new_chatroom_response,
@@ -329,6 +359,7 @@ class NetworkClient:
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
             "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico
+          
         }
 
         handler = handlers.get(msg_type)

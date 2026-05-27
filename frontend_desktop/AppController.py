@@ -1,17 +1,23 @@
+import sys
 import tkinter as tk
 from tkinter import messagebox
 from gui.views import LoginView, RegisterView
 from gui.app import ChatClientGUI
 from network.networkClient import NetworkClient
 
+# Valores por defecto de respaldo
 C_SERVER_IP   = "127.0.0.1"
 C_SERVER_PORT = 5006
 
 
 class AppController:
-    def __init__(self):
+    def __init__(self, server_ip=C_SERVER_IP, server_port=C_SERVER_PORT):
         self.network = NetworkClient()
         self.current_user = None
+
+        # ── Guardamos los parámetros dinámicos de conexión ────────────
+        self.server_ip = server_ip
+        self.server_port = server_port
 
         self.login_window    = None
         self.register_window = None
@@ -21,26 +27,29 @@ class AppController:
 
         # ── Ventana raíz ÚNICA — vive toda la sesión ─────────────────
         self.root = tk.Tk()
-        self.root.withdraw()          # invisible hasta que haya algo que mostrar
+        self.root.withdraw()          # Invisible hasta que haya algo que mostrar
 
-        # Callbacks de autenticación y ciclo de vida
+        # Callbacks de autenticación y ciclo de vida de la red
         self.network.on_login_response      = self.on_login_response_received
         self.network.on_register_response   = self.on_register_response_received
         self.network.on_sync_complete       = self.on_sync_complete_received
         self.network.on_server_disconnected = self.on_server_disconnected
 
         self.network.on_user_online         = self.on_user_online_received
+        self.network.on_user_offline        = self.on_user_offline_received
+        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
+        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
-    # ARRANQUE
+    # ARRANQUE DEL CONTROLLER
     # ─────────────────────────────────────────────────────────────
 
     def run(self):
         self.show_login()
-        self.root.mainloop()   # ← UN SOLO mainloop, aquí y en ningún otro lado
+        self.root.mainloop()   # ← UN SOLO mainloop en toda la aplicación
 
     # ─────────────────────────────────────────────────────────────
-    # NAVEGACIÓN
+    # NAVEGACIÓN ENTRE VENTANAS
     # ─────────────────────────────────────────────────────────────
 
     def show_login(self):
@@ -80,7 +89,7 @@ class AppController:
             return
         self._lobby_shown = True
 
-        # Cerrar login si aún existe
+        # Cerrar login si aún existe activo
         if self.login_window:
             try:
                 self.login_window.destroy()
@@ -90,7 +99,7 @@ class AppController:
 
         username = self.network.me.get("username", self.current_user or "")
 
-        # Reutilizamos self.root como ventana principal del lobby
+        # Reutilizamos la ventana raíz principal de Tkinter para el lobby
         self.root.deiconify()
 
         app = ChatClientGUI(
@@ -100,7 +109,10 @@ class AppController:
             network=self.network,
         )
 
-        # Conectar callbacks en tiempo real hacia la GUI
+        # Guardar la referencia a la GUI para refrescos asíncronos
+        self._app = app
+
+        # Conectar callbacks en tiempo real de mensajería hacia la GUI
         self.network.on_new_message         = getattr(app, "on_new_message",     None)
         self.network.on_room_created        = getattr(app, "on_room_created",    None)
         self.network.on_user_added          = getattr(app, "on_user_added",      None)
@@ -108,16 +120,20 @@ class AppController:
         self.network.on_message_deleted     = getattr(app, "on_message_deleted", None)
         self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
         self.network.on_server_disconnected = self.on_server_disconnected
+        self.network.on_user_offline        = self.on_user_offline_received
+        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
+        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
-    # ENVÍOS DESDE LAS VISTAS
+    # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)
     # ─────────────────────────────────────────────────────────────
 
     def _conectar(self) -> bool:
         if self.network.connected:
             return True
-        print(f"[CONTROLADOR] Conectando a {C_SERVER_IP}:{C_SERVER_PORT}...")
-        ok = self.network.connect(C_SERVER_IP, C_SERVER_PORT)
+        # Consume de forma dinámica la configuración provista por la instancia
+        print(f"[CONTROLADOR] Conectando a {self.server_ip}:{self.server_port}...")
+        ok = self.network.connect(self.server_ip, self.server_port)
         if not ok:
             self._mostrar_error_red()
         return ok
@@ -129,7 +145,7 @@ class AppController:
         else:
             messagebox.showerror(
                 "Error de Red",
-                f"No se pudo conectar a {C_SERVER_IP}:{C_SERVER_PORT}.\n"
+                f"No se pudo conectar a {self.server_ip}:{self.server_port}.\n"
                 "Verifica que el servidor esté encendido.",
                 parent=self.root,
             )
@@ -149,7 +165,7 @@ class AppController:
         print(f"[CONTROLADOR] CREATE_ACCOUNT enviado para '{user}'.")
 
     # ─────────────────────────────────────────────────────────────
-    # CALLBACKS ASÍNCRONOS  (hilo de red → .after() → hilo principal)
+    # CALLBACKS ASÍNCRONOS (Hilos de Red ──> .after() ──> Hilo Principal GUI)
     # ─────────────────────────────────────────────────────────────
 
     def on_login_response_received(self, success, message):
@@ -157,7 +173,7 @@ class AppController:
 
     def _safe_handle_login_ui(self, success, message):
         if success:
-            print("[CONTROLADOR] Login OK — esperando sync...")
+            print("[CONTROLADOR] Login OK — esperando sincronización de datos...")
             if self.login_window and hasattr(self.login_window, "lbl_error"):
                 self.login_window.lbl_error.config(text="◆ Conectado. Cargando datos...")
         else:
@@ -169,8 +185,30 @@ class AppController:
                 messagebox.showerror("Error de Autenticación", message, parent=self.root)
 
     def on_sync_complete_received(self):
-        print("[CONTROLADOR] Sync completo → abriendo Lobby")
-        self.root.after(0, self.show_lobby)
+        print("[CONTROLADOR] Sync completo → solicitando lista global de usuarios y salas...")
+        self.network.request_all_users()
+        self.network.request_all_rooms()
+
+    def on_all_users_loaded_received(self):
+        """Se dispara de forma asíncrona cuando GET_USERS terminó de recibirse."""
+        print("[CONTROLADOR] Lista completa de usuarios recibida")
+        self.root.after(0, self._try_open_lobby)
+
+    def on_all_rooms_loaded_received(self):
+        """Se dispara de forma asíncrona cuando GET_ROOMS terminó de recibirse."""
+        print("[CONTROLADOR] Lista completa de salas recibida")
+        self.root.after(0, self._try_open_lobby)
+
+    def _try_open_lobby(self):
+        """Abre el lobby de la app sólo cuando ambas listas están cargadas."""
+        if self._lobby_shown:
+            if hasattr(self, '_app') and self._app is not None:
+                try:
+                    self._app.refresh_sidebar()
+                except Exception:
+                    pass
+            return
+        self.show_lobby()
 
     def on_register_response_received(self, success, user_id, username):
         self.root.after(0, lambda: self._safe_handle_register_ui(success, user_id, username))
@@ -199,22 +237,24 @@ class AppController:
             self.network.connected = False
 
     # ─────────────────────────────────────────────────────────────
-    # NUEVO EVENTO PUSH: USUARIO CONECTADO EN TIEMPO REAL
+    # EVENTOS PUSH EN TIEMPO REAL
     # ─────────────────────────────────────────────────────────────
+
     def on_user_online_received(self, user_id, username):
-        """
-        Se ejecuta en el hilo de red cuando un usuario nuevo entra al servidor.
-        Llamamos a Tkinter de forma segura usando root.after
-        """
-        self.root.after(0, self._safe_update_user_list, user_id, username)
+        """Notificación push cuando un usuario se conecta en red."""
+        self.root.after(0, self._safe_refresh_sidebar)
 
-    def _safe_update_user_list(self, user_id, username):
-        """
-        Le pide a la aplicación principal que refresque la UI si está abierta.
-        """
-        if hasattr(self, 'app') and self.app is not None:
-            self.app.refresh_users_ui()
+    def on_user_offline_received(self, user_id, username):
+        """Notificación push cuando un usuario se desconecta."""
+        self.root.after(0, self._safe_refresh_sidebar)
 
+    def _safe_refresh_sidebar(self):
+        """Refresca de manera segura el sidebar de la GUI si está activo."""
+        if hasattr(self, '_app') and self._app is not None:
+            try:
+                self._app.refresh_sidebar()
+            except Exception as e:
+                print(f"[CONTROLADOR] Error al refrescar sidebar: {e}")
 
     def on_server_disconnected(self):
         print("[CONTROLADOR] Desconectado del servidor.")
@@ -222,20 +262,20 @@ class AppController:
             0,
             lambda: messagebox.showerror(
                 "Conexión perdida",
-                "Se perdió la conexión con el servidor.\nReinicia la aplicación.",
+                "Se perdió la conexión con el servidor de chat.\nPor favor, reinicia la aplicación.",
                 parent=self.root,
             ),
         )
 
 
+# ─────────────────────────────────────────────────────────────
+# BLOQUE PRINCIPAL DE EJECUCIÓN (ENTRY POINT)
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import sys
-
-    # Valores por defecto
     server_ip = C_SERVER_IP
     server_port = C_SERVER_PORT
 
-    # Si se pasan argumentos por consola: python AppController.py <IP> <PUERTO>
+    # Validación e inyección de argumentos pasados por consola (sys.argv)
     if len(sys.argv) > 1:
         server_ip = sys.argv[1]
     if len(sys.argv) > 2:
@@ -246,15 +286,6 @@ if __name__ == "__main__":
 
     print(f"[CONTROLADOR] Configurado para conectar a {server_ip}:{server_port}")
     
-    # Instanciamos el controlador y sobreescribimos las constantes con los argumentos
-    controller = AppController()
-    
-    # Modificamos la llamada de conexión en el flujo para usar estas variables dinámicas
-    # Nota: Asegúrate de que en los métodos de AppController donde llamas a self.network.connect(...) 
-    # le pases (server_ip, server_port) en lugar de las constantes fijas.
-    
-    # Para asegurar que se usen en el login/registro, podemos guardar estos datos en el controlador:
-    controller.server_ip = server_ip
-    controller.server_port = server_port
-
+    # Instanciamos pasándole la configuración leída dinámicamente de los argumentos de consola
+    controller = AppController(server_ip, server_port)
     controller.run()

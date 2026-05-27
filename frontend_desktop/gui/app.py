@@ -788,7 +788,7 @@ class ChatClientGUI:
             user_ids_list = room.get("userIds", [])
             for u_id in user_ids_list:
                 # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
-                user_info = self.users.get(u_id, {}) if hasattr(self, 'users') else {}
+                user_info = self.network.users.get(u_id, {})
                 user_name = user_info.get("name", "Desconocido")
                 lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
         else:

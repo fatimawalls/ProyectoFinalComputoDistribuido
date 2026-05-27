@@ -37,8 +37,6 @@ class AppController:
 
         self.network.on_user_online         = self.on_user_online_received
         self.network.on_user_offline        = self.on_user_offline_received
-        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
-        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # ARRANQUE DEL CONTROLLER
@@ -121,8 +119,6 @@ class AppController:
         self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
         self.network.on_server_disconnected = self.on_server_disconnected
         self.network.on_user_offline        = self.on_user_offline_received
-        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
-        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)
@@ -185,18 +181,15 @@ class AppController:
                 messagebox.showerror("Error de Autenticación", message, parent=self.root)
 
     def on_sync_complete_received(self):
-        print("[CONTROLADOR] Sync completo → solicitando lista global de usuarios y salas...")
-        self.network.request_all_users()
-        self.network.request_all_rooms()
+        """
+        El sync inicial ya trae TODO:
+        - usuarios
+        - salas
+        - mensajes
 
-    def on_all_users_loaded_received(self):
-        """Se dispara de forma asíncrona cuando GET_USERS terminó de recibirse."""
-        print("[CONTROLADOR] Lista completa de usuarios recibida")
-        self.root.after(0, self._try_open_lobby)
-
-    def on_all_rooms_loaded_received(self):
-        """Se dispara de forma asíncrona cuando GET_ROOMS terminó de recibirse."""
-        print("[CONTROLADOR] Lista completa de salas recibida")
+        Por eso ya no se hacen GET_USERS ni GET_ROOMS.
+        """
+        print("[CONTROLADOR] Sync completo → abriendo lobby con la base local cargada")
         self.root.after(0, self._try_open_lobby)
 
     def _try_open_lobby(self):

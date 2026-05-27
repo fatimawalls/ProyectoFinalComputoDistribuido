@@ -533,6 +533,7 @@ void handleGetRooms(int clientSocket)
 
 
 
+
 void handleRequest(
     int clientSocket,
     const char *requestText

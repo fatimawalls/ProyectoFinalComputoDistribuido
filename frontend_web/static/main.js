@@ -319,7 +319,7 @@ function leaveRoom() {
     });
 }
 
-socket.on('left_room', () => { activeRoom = null; switchScreen('welcome-screen'); });
+socket.on('room_left', () => { activeRoom = null; switchScreen('welcome-screen'); });
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -426,16 +426,16 @@ function coordActionWithConfirm(action, username, nickname) {
 
 function deleteRoom() {
     customConfirm('DELETE ROOM', 'Delete this room? This action cannot be undone.', () => {
-        socket.emit('coord_action', { action: 'delete', room_id: activeRoom });
+        socket.emit('delete_room', { room_id: activeRoom });
     });
 }
 
-socket.on('room_deleted_result', data => {
-    if (data.success) {
-        closeModals(); activeRoom = null; switchScreen('welcome-screen');
-    } else {
-        customInfo('WARNING', 'You can only delete a room when you are the last member.', 'var(--warning)');
-    }
+socket.on('room_deleted', () => {
+    closeModals(); activeRoom = null; switchScreen('welcome-screen');
+});
+
+socket.on('room_error', data => {
+    customInfo('WARNING', data.message || 'You can only delete a room when you are the last member.', 'var(--warning)');
 });
 
 

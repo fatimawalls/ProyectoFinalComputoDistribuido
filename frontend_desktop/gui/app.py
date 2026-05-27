@@ -1069,12 +1069,23 @@ class ChatClientGUI:
 
         def delete_room_action():
             panel.grab_release()
+            # Verificar que el coordinador sea el único miembro antes de intentar
+            current_room_data = self._get_room(room_id)
+            members = current_room_data.get("userIds", current_room_data.get("members", [])) if current_room_data else []
+            if len(members) > 1:
+                self.info_dialog("ADVERTENCIA",
+                                 "Solo puedes eliminar la sala si eres el único miembro.",
+                                 parent=panel, color=self.WARNING_COLOR)
+                panel.grab_set()
+                return
             if self.confirm_dialog("DELETE ROOM",
-                                   "¿Eliminar esta sala? Solo es posible si eres el único miembro.",
+                                   "¿Eliminar esta sala? Esta acción no se puede deshacer.",
                                    parent=panel):
                 if self.network:
                     # Handbook: {"type":"DELETE_CHATROOM","chatRoomId":X}
+                    # La navegación ocurre en on_room_deleted cuando el server confirma
                     self.network.delete_room(room_id)
+                    panel.destroy()
                 else:
                     success = self.mock.delete_room(room_id)
                     if not success:
@@ -1083,10 +1094,10 @@ class ChatClientGUI:
                                          parent=panel, color=self.WARNING_COLOR)
                         panel.grab_set()
                         return
-                panel.destroy()
-                self.current_room = None
-                self.refresh_sidebar()
-                self.show_welcome_view()
+                    panel.destroy()
+                    self.current_room = None
+                    self.refresh_sidebar()
+                    self.show_welcome_view()
             else:
                 panel.grab_set()
 

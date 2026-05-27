@@ -562,7 +562,18 @@ def openChat(chatRoomId: int):
 # ==================================================
 # GENERIC SERVER EVENT HANDLER
 # ==================================================
+def printState():
+    print("Friends:")
+    for friend in friends:
+        print(friend)
 
+    print("\nChatRooms:")
+    for chatRoom in chatRooms:
+        print(chatRoom)
+
+    print("\nMessages:")
+    for message in messages:
+        print(message)
 def applyServerJson(jsonString: str):
     """
     Applies a single JSON string received from the server.
@@ -590,7 +601,7 @@ def applyServerJson(jsonString: str):
     - The object modified/created/deleted when applicable
     - None when nothing should be changed
     """
-
+    print(f"Applying server JSON: {jsonString}")
     if not jsonString or not jsonString.strip():
         return None
 
@@ -668,7 +679,7 @@ def applyServerJson(jsonString: str):
         return deleteChatRoom(
             data["chatRoomId"]
         )
-
+    
     return None
 
 
@@ -696,15 +707,4 @@ def applyServerJsonList(jsonStrings: list[str]):
 # DEBUG HELPERS
 # ==================================================
 
-def printState():
-    print("Friends:")
-    for friend in friends:
-        print(friend)
 
-    print("\nChatRooms:")
-    for chatRoom in chatRooms:
-        print(chatRoom)
-
-    print("\nMessages:")
-    for message in messages:
-        print(message)

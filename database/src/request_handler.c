@@ -495,6 +495,44 @@ void handleDeleteChatRoom(
         notifyCount
     );
 }
+
+void handleGetUsers(int clientSocket)
+{
+    int count;
+    User* users = getAllUsers(&count);
+
+    for (int i = 0; i < count; i++) {
+        sendChatUserJson(clientSocket, users[i].id, users[i].name);
+    }
+
+    /* Señal de fin — reutilizamos SYNC_END o un tipo propio */
+    cJSON* end = cJSON_CreateObject();
+    cJSON_AddStringToObject(end, "type", "GET_USERS_END");
+    sendJson(clientSocket, end);
+    cJSON_Delete(end);
+
+    freeUsers(users, count);
+}
+
+void handleGetRooms(int clientSocket)
+{
+    int count;
+    ChatRoom* rooms = getAllChatRooms(&count);
+
+    for (int i = 0; i < count; i++) {
+        sendChatRoomJson(clientSocket, &rooms[i]);
+    }
+
+    cJSON* end = cJSON_CreateObject();
+    cJSON_AddStringToObject(end, "type", "GET_ROOMS_END");
+    sendJson(clientSocket, end);
+    cJSON_Delete(end);
+
+    freeChatRooms(rooms, count);
+}
+
+
+
 void handleRequest(
     int clientSocket,
     const char *requestText
@@ -595,6 +633,15 @@ void handleRequest(
             clientSocket,
             request
         );
+    }
+
+    else if (strcmp(type, "GET_USERS") == 0)
+    {
+        handleGetUsers(clientSocket);
+    }
+    else if (strcmp(type, "GET_ROOMS") == 0)
+    {
+        handleGetRooms(clientSocket);
     }
 
     cJSON_Delete(request);

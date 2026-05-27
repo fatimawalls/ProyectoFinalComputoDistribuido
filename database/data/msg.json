@@ -128,4 +128,14 @@
 		"userId":	2,
 		"chatRoomId":	2,
 		"text":	"a"
+	}, {
+		"id":	28,
+		"userId":	2,
+		"chatRoomId":	17,
+		"text":	"54e6rt7fyguihjkl"
+	}, {
+		"id":	29,
+		"userId":	2,
+		"chatRoomId":	2,
+		"text":	"mensaje a vale"
 	}]

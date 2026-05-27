@@ -9,7 +9,7 @@
 		"name":	"general",
 		"coordinatorId":	2,
 		"userIds":	[2],
-		"messageIds":	[17, 19, 20, 21, 22, 23, 24, 26, 27]
+		"messageIds":	[17, 19, 20, 21, 22, 23, 24, 26, 27, 29]
 	}, {
 		"id":	3,
 		"name":	"prueba2",
@@ -93,5 +93,5 @@
 		"name":	"wawdogih",
 		"coordinatorId":	2,
 		"userIds":	[2],
-		"messageIds":	[]
+		"messageIds":	[28]
 	}]

@@ -33,7 +33,7 @@ class Protocol:
     REQ_LEAVE_ROOM  = "REMOVE_USER"
     REQ_DELETE_ROOM = "DELETE_CHATROOM"
     REQ_ADD_USER    = "ADD_USER"
-    REQ_JOIN_ROOM   = "JOIN_REQUEST"
+    REQ_JOIN_ROOM   = "REQUEST"
 
     # ── Incoming: respuestas ────────────────────────────────────────
     RES_LOGIN       = "AUTH_RESPONSE"
@@ -103,7 +103,7 @@ class Protocol:
 
     @staticmethod
     def build_request_join(room_id: int, user_id: int) -> bytes:
-        return Protocol._flat({"type": "JOIN_REQUEST",
+        return Protocol._flat({"type": "REQUEST",
                                "chatRoomId": room_id, "userId": user_id})
 
     @staticmethod

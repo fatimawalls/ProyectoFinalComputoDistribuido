@@ -201,9 +201,10 @@ class ChatClientGUI:
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
-        self._scroll_inner = tk.Frame(canvas, bg=self.BG_DARK)
-        self._scroll_win   = canvas.create_window((0, 0), window=self._scroll_inner,
-                                                   anchor="nw")
+        self._sidebar_canvas = canvas
+        self._scroll_inner   = tk.Frame(canvas, bg=self.BG_DARK)
+        self._scroll_win     = canvas.create_window((0, 0), window=self._scroll_inner,
+                                                     anchor="nw")
 
         def _on_frame_configure(e):
             canvas.configure(scrollregion=canvas.bbox("all"))
@@ -213,10 +214,30 @@ class ChatClientGUI:
         self._scroll_inner.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Mouse wheel
+        # Mouse wheel — solo scrollea el canvas cuando el cursor está en el sidebar.
+        # bind_all captura el evento globalmente; la guarda _in_sidebar evita que
+        # interfiera con el ScrolledText del chat u otros widgets.
+        def _in_sidebar(widget):
+            w = widget
+            while w is not None:
+                if w is scroll_container:
+                    return True
+                w = getattr(w, "master", None)
+            return False
+
         def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            if _in_sidebar(e.widget):
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        def _on_scroll_up(e):
+            if _in_sidebar(e.widget):
+                canvas.yview_scroll(-1, "units")
+        def _on_scroll_down(e):
+            if _in_sidebar(e.widget):
+                canvas.yview_scroll(1, "units")
+
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>",   _on_scroll_up)
+        canvas.bind_all("<Button-5>",   _on_scroll_down)
 
         # ── MY CHANNELS ──────────────────────────────────────────
         my_hdr = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
@@ -377,6 +398,12 @@ class ChatClientGUI:
             tk.Label(self.users_frame, text="  No other users online.",
                      font=self.FONT_SMALL, bg=self.BG_DARK,
                      fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=8, pady=4)
+
+        # Fuerza que Tkinter calcule el layout antes de actualizar el scrollregion
+        self._scroll_inner.update_idletasks()
+        self._sidebar_canvas.configure(
+            scrollregion=self._sidebar_canvas.bbox("all")
+        )
 
     def _make_room_row(self, parent, room, member: bool):
         """Renders a single room row button in the sidebar."""
@@ -733,6 +760,12 @@ class ChatClientGUI:
             highlightthickness=0, spacing1=5, spacing3=5)
         self.chat_history.pack(fill="both", expand=True)
         self.chat_history.vbar.configure(width=10)
+        self.chat_history.bind("<Button-4>",
+            lambda e: self.chat_history.yview_scroll(-1, "units"))
+        self.chat_history.bind("<Button-5>",
+            lambda e: self.chat_history.yview_scroll(1, "units"))
+        self.chat_history.bind("<MouseWheel>",
+            lambda e: self.chat_history.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
         self.chat_history.tag_config("system", foreground=self.ACCENT, font=("Consolas", 10, "italic"))
         self.chat_history.tag_config("user",   foreground=self.TEXT_MUTED, font=("Consolas", 11, "bold"))

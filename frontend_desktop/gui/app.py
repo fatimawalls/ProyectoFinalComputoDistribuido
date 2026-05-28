@@ -1031,7 +1031,9 @@ class ChatClientGUI:
                     panel.destroy()
                     self.open_coordinator_panel(room_id)
 
-                
+                tk.Button(r_item, text="REJECT", font=self.FONT_SMALL,
+                          bg=self.ERROR_COLOR, fg=self.TEXT_MAIN, relief="flat",
+                          command=reject_action).pack(side="right", padx=2)
                 tk.Button(r_item, text="ACCEPT", font=self.FONT_SMALL,
                           bg=self.SUCCESS_COLOR, fg=self.BG_DARK, relief="flat",
                           command=accept_action).pack(side="right", padx=2)

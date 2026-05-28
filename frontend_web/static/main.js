@@ -133,6 +133,10 @@ socket.on('register_success', data => {
     switchView('login-view');
 });
 
+socket.on('register_error', data => {
+    document.getElementById('reg-error').innerText = `◆ ${data.message}`;
+});
+
 
 // ═══════════════════════════════════════════════════════════════
 //  LOBBY DATA

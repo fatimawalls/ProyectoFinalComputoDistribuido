@@ -330,4 +330,4 @@ if __name__ == "__main__":
     print(f"[web_server] UDP listener  -> :{UDP_LISTEN_PORT}")
     socketio.start_background_task(udp_listener)
     socketio.run(app, host=WEB_HOST, port=WEB_PORT,
-                 debug=True, allow_unsafe_werkzeug=True)
+                 debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

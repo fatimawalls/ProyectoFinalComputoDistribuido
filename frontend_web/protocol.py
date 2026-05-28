@@ -33,6 +33,7 @@ class Protocol:
     REQ_LEAVE_ROOM  = "REMOVE_USER"
     REQ_DELETE_ROOM = "DELETE_CHATROOM"
     REQ_ADD_USER    = "ADD_USER"
+    REQ_JOIN_ROOM   = "JOIN_REQUEST"
 
     # ── Incoming: respuestas ────────────────────────────────────────
     RES_LOGIN       = "AUTH_RESPONSE"
@@ -41,6 +42,7 @@ class Protocol:
     RES_LEAVE_ROOM  = "REMOVE_USER_RESPONSE"
     RES_DELETE_ROOM = "DELETE_CHATROOM_RESPONSE"
     RES_ADD_USER    = "ADD_USER_RESPONSE"
+    RES_JOIN_ROOM   = "REQUEST_RESPONSE"
 
     # ── Incoming: sync inicial ──────────────────────────────────────
     SYNC_START  = "SYNC_START"
@@ -97,6 +99,11 @@ class Protocol:
     @staticmethod
     def build_add_user(room_id: int, user_id: int) -> bytes:
         return Protocol._flat({"type": "ADD_USER",
+                               "chatRoomId": room_id, "userId": user_id})
+
+    @staticmethod
+    def build_request_join(room_id: int, user_id: int) -> bytes:
+        return Protocol._flat({"type": "JOIN_REQUEST",
                                "chatRoomId": room_id, "userId": user_id})
 
     @staticmethod
@@ -177,6 +184,7 @@ class ProtocolDispatcher:
             Protocol.RES_LEAVE_ROOM:  self._on_leave_room,
             Protocol.RES_ADD_USER:    self._on_add_user,
             Protocol.RES_DELETE_ROOM: self._on_delete_room,
+            Protocol.RES_JOIN_ROOM:   self._on_join_request_response,
             Protocol.EVT_USER_ONLINE:  self._on_user_online,
             Protocol.EVT_USER_OFFLINE: self._on_user_offline,
         }
@@ -521,6 +529,15 @@ class ProtocolDispatcher:
                 "room_id":  room_id,
                 "username": username,
             }, to=sid)
+
+    def _on_join_request_response(self, sid, status, p):
+        success = p.get("success") == 1
+        room_id = p.get("chatRoomId")
+        print(f"[dispatcher] JOIN_REQUEST_RESPONSE sala #{room_id} success={success}")
+        self.sio.emit("join_request_response", {
+            "room_id": room_id,
+            "success": success,
+        }, to=sid)
 
     def _on_delete_room(self, sid, status, p):
         room_id = p.get("chatRoomId")

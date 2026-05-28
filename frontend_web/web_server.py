@@ -195,7 +195,7 @@ def handle_request_join(data):
     room_id = data.get("room_id")
     print(f"[web_server] request_join sid={sid} room={room_id} uid={uid}")
     if room_id is not None and uid:
-        send_to_c(sid, Protocol.build_add_user(int(room_id), uid))
+        send_to_c(sid, Protocol.build_request_join(int(room_id), uid))
 
 
 @socketio.on("leave_room")

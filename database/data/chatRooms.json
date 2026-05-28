@@ -9,7 +9,8 @@
 		"name":	"prueba2",
 		"coordinatorId":	2,
 		"userIds":	[2, 14],
-		"messageIds":	[2, 13]
+		"messageIds":	[2, 13, 48, 49, 50, 51, 52],
+		"requestIds":	[]
 	}, {
 		"id":	4,
 		"name":	"prueba4",
@@ -26,8 +27,8 @@
 		"id":	6,
 		"name":	"prueban+1",
 		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[3, 44, 45, 46, 47],
+		"userIds":	[2, 14],
+		"messageIds":	[3, 44, 45, 46, 47, 53, 54, 55, 56, 57, 58, 59],
 		"requestIds":	[]
 	}, {
 		"id":	7,
@@ -129,6 +130,20 @@
 		"name":	"lol",
 		"coordinatorId":	15,
 		"userIds":	[15],
+		"messageIds":	[],
+		"requestIds":	[]
+	}, {
+		"id":	20,
+		"name":	"JaimeChat",
+		"coordinatorId":	16,
+		"userIds":	[16, 14],
+		"messageIds":	[],
+		"requestIds":	[]
+	}, {
+		"id":	21,
+		"name":	"TODOs",
+		"coordinatorId":	2,
+		"userIds":	[2],
 		"messageIds":	[],
 		"requestIds":	[]
 	}]

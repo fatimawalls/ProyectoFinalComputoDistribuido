@@ -7,7 +7,7 @@
 		"id":	2,
 		"name":	"soto",
 		"password":	"soto",
-		"chatRoomsIds":	[3, 4, 5, 6, 16, 17]
+		"chatRoomsIds":	[3, 4, 5, 6, 16, 17, 21]
 	}, {
 		"id":	3,
 		"name":	"juan",
@@ -67,10 +67,15 @@
 		"id":	14,
 		"name":	"eddy",
 		"password":	"123123",
-		"chatRoomsIds":	[3]
+		"chatRoomsIds":	[3, 20, 6]
 	}, {
 		"id":	15,
 		"name":	"vale",
 		"password":	"123456",
 		"chatRoomsIds":	[19]
+	}, {
+		"id":	16,
+		"name":	"Jaime",
+		"password":	"123456",
+		"chatRoomsIds":	[20]
 	}]

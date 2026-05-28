@@ -228,4 +228,64 @@
 		"userId":	2,
 		"chatRoomId":	6,
 		"text":	"juan"
+	}, {
+		"id":	48,
+		"userId":	14,
+		"chatRoomId":	3,
+		"text":	"sexo soto"
+	}, {
+		"id":	49,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"auhg"
+	}, {
+		"id":	50,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"AEGIUH"
+	}, {
+		"id":	51,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"aegouhAGIJ"
+	}, {
+		"id":	52,
+		"userId":	2,
+		"chatRoomId":	3,
+		"text":	"aigsuhAOGSINapgsj"
+	}, {
+		"id":	53,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"edu"
+	}, {
+		"id":	54,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"oye"
+	}, {
+		"id":	55,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"carbón"
+	}, {
+		"id":	56,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"contesta"
+	}, {
+		"id":	57,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"aaaaaaaaaaaaaaaaaaaaaaaa"
+	}, {
+		"id":	58,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"pollo"
+	}, {
+		"id":	59,
+		"userId":	2,
+		"chatRoomId":	6,
+		"text":	"a"
 	}]

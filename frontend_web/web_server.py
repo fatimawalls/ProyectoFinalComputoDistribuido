@@ -3,6 +3,8 @@ eventlet.monkey_patch()
 
 import socket
 import sys
+import hashlib
+import time
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 
@@ -94,6 +96,71 @@ def listen_to_c_server(sid: str, sock: socket.socket):
     client_sockets.pop(sid, None)
     socketio.emit("server_disconnected",
                   {"message": "Conexión con el servidor perdida."}, to=sid)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# LISTENER UDP — recibe push del servidor C y reenvía a browsers
+# ════════════════════════════════════════════════════════════════════════
+
+UDP_LISTEN_PORT = 5001
+_udp_seen: dict[str, float] = {}   # dedup: hash → timestamp
+
+
+def _is_duplicate_udp(raw: str) -> bool:
+    """Devuelve True si este mensaje ya se procesó hace menos de 2 s."""
+    h = hashlib.md5(raw.encode()).hexdigest()
+    now = time.time()
+    # Limpiar entradas viejas
+    for k in list(_udp_seen.keys()):
+        if now - _udp_seen[k] > 5.0:
+            del _udp_seen[k]
+    if h in _udp_seen:
+        return True
+    _udp_seen[h] = now
+    return False
+
+
+def udp_listener():
+    """
+    Tarea de fondo: escucha en UDP_LISTEN_PORT y reenvía cada mensaje
+    a TODOS los browsers conectados via Socket.IO.
+
+    El servidor C envía un datagrama por cada usuario web registrado
+    (todos comparten el mismo IP: el de web_server.py), por eso
+    deduplicamos antes de hacer broadcast a los sids.
+    """
+    try:
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        udp_sock.bind(("", UDP_LISTEN_PORT))
+        print(f"[udp] Escuchando notificaciones UDP en puerto {UDP_LISTEN_PORT}")
+    except Exception as e:
+        print(f"[udp] ERROR: no se pudo abrir UDP {UDP_LISTEN_PORT}: {e}")
+        return
+
+    while True:
+        try:
+            data, addr = udp_sock.recvfrom(65536)
+            raw = data.decode("utf-8", errors="replace").strip()
+            if not raw:
+                continue
+            print(f"[udp] <- {addr}  {raw[:120]!r}")
+
+            if _is_duplicate_udp(raw):
+                print(f"[udp] Duplicado ignorado")
+                continue
+
+            # Reenviar a cada browser conectado
+            sids = list(client_sockets.keys())
+            print(f"[udp] Reenviando a {len(sids)} cliente(s) web")
+            for sid in sids:
+                try:
+                    dispatcher.dispatch(sid, raw)
+                except Exception as ex:
+                    print(f"[udp] Error despachando a sid={sid}: {ex}")
+        except Exception as e:
+            print(f"[udp] Error en recv: {e}")
+            eventlet.sleep(1)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -260,5 +327,7 @@ def handle_delete_room(data):
 if __name__ == "__main__":
     print(f"[web_server] Backend C    -> {C_SERVER_IP}:{C_SERVER_PORT}")
     print(f"[web_server] Web listening -> http://{WEB_HOST}:{WEB_PORT}")
+    print(f"[web_server] UDP listener  -> :{UDP_LISTEN_PORT}")
+    socketio.start_background_task(udp_listener)
     socketio.run(app, host=WEB_HOST, port=WEB_PORT,
                  debug=True, allow_unsafe_werkzeug=True)

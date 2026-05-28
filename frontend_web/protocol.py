@@ -184,7 +184,9 @@ class ProtocolDispatcher:
             Protocol.RES_LEAVE_ROOM:  self._on_leave_room,
             Protocol.RES_ADD_USER:    self._on_add_user,
             Protocol.RES_DELETE_ROOM: self._on_delete_room,
-            Protocol.RES_JOIN_ROOM:   self._on_join_request_response,
+            Protocol.RES_JOIN_ROOM:        self._on_join_request_response,
+            "JOIN_REQUEST_RESPONSE":       self._on_join_request_response,
+            "DELETE_REQUEST_RESPONSE":     self._on_join_request_response,
             Protocol.EVT_USER_ONLINE:  self._on_user_online,
             Protocol.EVT_USER_OFFLINE: self._on_user_offline,
         }

@@ -43,6 +43,10 @@ Message createMessage(const char *text, int userId, int chatRoomId);
 int saveMessage(Message *message);
 
 int addUserToChatRoom(int userId, int chatRoomId);
+
+int addJoinRequestToChatRoom(int userId, int chatRoomId);
+
+int removeJoinRequestFromChatRoom(int userId, int chatRoomId);
 Message *getMessageById(int id);
 int deleteMessageById(
     int messageId

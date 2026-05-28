@@ -31,6 +31,69 @@ void sendJson(
     free(text);
 }
 
+
+static cJSON *chatRoomPayload(ChatRoom *room)
+{
+    cJSON *chat = cJSON_CreateObject();
+
+    cJSON_AddNumberToObject(chat, "id", room->id);
+    cJSON_AddStringToObject(chat, "name", room->name);
+    cJSON_AddNumberToObject(chat, "coordinatorId", room->coordinatorId);
+
+    cJSON *users = cJSON_CreateArray();
+
+    for(int i = 0; i < room->userCount; i++)
+    {
+        cJSON_AddItemToArray(
+            users,
+            cJSON_CreateNumber(room->userIds[i])
+        );
+    }
+
+    cJSON_AddItemToObject(chat, "userIds", users);
+
+    cJSON *messages = cJSON_CreateArray();
+
+    for(int i = 0; i < room->messageCount; i++)
+    {
+        cJSON_AddItemToArray(
+            messages,
+            cJSON_CreateNumber(room->messageIds[i])
+        );
+    }
+
+    cJSON_AddItemToObject(chat, "messageIds", messages);
+
+    cJSON *requests = cJSON_CreateArray();
+
+    for(int i = 0; i < room->requestCount; i++)
+    {
+        cJSON_AddItemToArray(
+            requests,
+            cJSON_CreateNumber(room->requestIds[i])
+        );
+    }
+
+    cJSON_AddItemToObject(chat, "requestIds", requests);
+
+    return chat;
+}
+
+static cJSON *intArrayPayload(int *items, int count)
+{
+    cJSON *array = cJSON_CreateArray();
+
+    for(int i = 0; i < count; i++)
+    {
+        cJSON_AddItemToArray(
+            array,
+            cJSON_CreateNumber(items[i])
+        );
+    }
+
+    return array;
+}
+
 void sendAuthResponse(
     int clientSocket,
     int success,
@@ -148,46 +211,12 @@ void sendChatRoomJson(
     ChatRoom *room
 )
 {
-    cJSON *json = cJSON_CreateObject();
+    cJSON *json = chatRoomPayload(room);
 
     cJSON_AddStringToObject(
         json,
         "type",
         "CHATROOM"
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "id",
-        room->id
-    );
-
-    cJSON_AddStringToObject(
-        json,
-        "name",
-        room->name
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "coordinatorId",
-        room->coordinatorId
-    );
-
-    cJSON *users = cJSON_CreateArray();
-
-    for(int i = 0; i < room->userCount; i++)
-    {
-        cJSON_AddItemToArray(
-            users,
-            cJSON_CreateNumber(room->userIds[i])
-        );
-    }
-
-    cJSON_AddItemToObject(
-        json,
-        "userIds",
-        users
     );
 
     sendJson(clientSocket, json);
@@ -392,31 +421,10 @@ void sendNewChatRoomResponse(
             Chat room object
         */
 
-        cJSON *chat =
-            cJSON_CreateObject();
-
-        cJSON_AddNumberToObject(
-            chat,
-            "id",
-            room->id
-        );
-
-        cJSON_AddStringToObject(
-            chat,
-            "name",
-            room->name
-        );
-
-        cJSON_AddNumberToObject(
-            chat,
-            "coordinatorId",
-            room->coordinatorId
-        );
-
         cJSON_AddItemToObject(
             json,
             "chatRoom",
-            chat
+            chatRoomPayload(room)
         );
 
         /*
@@ -457,6 +465,7 @@ void sendUserChatRelationResponse(
     int userId,
     int chatRoomId,
     User *chatUser,
+    ChatRoom *room,
     int *notifyUsers,
     int notifyCount
 )
@@ -488,7 +497,33 @@ void sendUserChatRelationResponse(
     );
 
     /*
-        Added user info
+        Full chat room state after the mutation.
+        This lets the client update userIds and requestIds from one source.
+    */
+
+    if(room != NULL)
+    {
+        cJSON_AddItemToObject(
+            json,
+            "chatRoom",
+            chatRoomPayload(room)
+        );
+
+        cJSON_AddItemToObject(
+            json,
+            "userIds",
+            intArrayPayload(room->userIds, room->userCount)
+        );
+
+        cJSON_AddItemToObject(
+            json,
+            "requestIds",
+            intArrayPayload(room->requestIds, room->requestCount)
+        );
+    }
+
+    /*
+        Added/requesting user info
     */
 
     if(chatUser != NULL)
@@ -519,23 +554,10 @@ void sendUserChatRelationResponse(
         Notify users
     */
 
-    cJSON *users =
-        cJSON_CreateArray();
-
-    for(int i=0;i<notifyCount;i++)
-    {
-        cJSON_AddItemToArray(
-            users,
-            cJSON_CreateNumber(
-                notifyUsers[i]
-            )
-        );
-    }
-
     cJSON_AddItemToObject(
         json,
         "notifyUsers",
-        users
+        intArrayPayload(notifyUsers, notifyCount)
     );
 
     sendJson(

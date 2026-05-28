@@ -71,6 +71,7 @@ void sendUserChatRelationResponse(
     int userId,
     int chatRoomId,
     User *chatUser,
+    ChatRoom *room,
     int *notifyUsers,
     int notifyCount
 );

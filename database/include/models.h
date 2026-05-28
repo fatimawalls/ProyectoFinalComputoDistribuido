@@ -39,6 +39,9 @@ typedef struct {
     int *messageIds;
     int messageCount;
 
+    int *requestIds;
+    int requestCount;
+
     int coordinatorId;
 
     long filePosition;

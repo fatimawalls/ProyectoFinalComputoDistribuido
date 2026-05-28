@@ -43,6 +43,8 @@ void freeChatRoom(ChatRoom *chatRoom)
     free(chatRoom->userIds);
 
     free(chatRoom->messageIds);
+
+    free(chatRoom->requestIds);
 }
 
 void freeChatRooms(ChatRoom *chatRooms,int count)

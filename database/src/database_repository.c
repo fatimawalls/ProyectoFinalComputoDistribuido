@@ -260,6 +260,20 @@ static cJSON *chatRoomToJson(ChatRoom *room)
         "messageIds",
         messages);
 
+    cJSON *requests = cJSON_CreateArray();
+
+    for (int i = 0; i < room->requestCount; i++)
+    {
+        cJSON_AddItemToArray(
+            requests,
+            cJSON_CreateNumber(room->requestIds[i]));
+    }
+
+    cJSON_AddItemToObject(
+        json,
+        "requestIds",
+        requests);
+
     return json;
 }
 
@@ -282,6 +296,10 @@ ChatRoom createChatRoom(const char *name, int coordinatorId)
     room.messageIds = NULL;
 
     room.messageCount = 0;
+
+    room.requestIds = NULL;
+
+    room.requestCount = 0;
 
     return room;
 }
@@ -619,6 +637,18 @@ int addUserToChatRoom(int userId, int chatRoomId)
     }
 
     /*
+        If this user had requested access before, remove the pending request.
+    */
+
+    if (containsInt(room->requestIds, room->requestCount, userId))
+    {
+        removeIntFromArray(
+            &room->requestIds,
+            &room->requestCount,
+            userId);
+    }
+
+    /*
         Save changes
     */
 
@@ -640,6 +670,89 @@ int addUserToChatRoom(int userId, int chatRoomId)
 
     return 1;
 }
+
+int addJoinRequestToChatRoom(int userId, int chatRoomId)
+{
+    User *user = getUserById(userId);
+
+    if (!user)
+    {
+        return 0;
+    }
+
+    ChatRoom *room = getChatRoomById(chatRoomId);
+
+    if (!room)
+    {
+        freeUser(user);
+        free(user);
+
+        return 0;
+    }
+
+    /*
+        If the user is already a member, there is no pending request to add.
+    */
+
+    if (containsInt(room->userIds, room->userCount, userId))
+    {
+        freeUser(user);
+        free(user);
+
+        freeChatRoom(room);
+        free(room);
+
+        return 1;
+    }
+
+    /*
+        Add user to pending requests if it is not already there.
+    */
+
+    if (!containsInt(room->requestIds, room->requestCount, userId))
+    {
+        room->requestIds = appendIntToArray(
+            room->requestIds,
+            &room->requestCount,
+            userId);
+    }
+
+    updateChatRoom(room);
+
+    freeUser(user);
+    free(user);
+
+    freeChatRoom(room);
+    free(room);
+
+    return 1;
+}
+
+int removeJoinRequestFromChatRoom(int userId, int chatRoomId)
+{
+    ChatRoom *room = getChatRoomById(chatRoomId);
+
+    if (!room)
+    {
+        return 0;
+    }
+
+    if (containsInt(room->requestIds, room->requestCount, userId))
+    {
+        removeIntFromArray(
+            &room->requestIds,
+            &room->requestCount,
+            userId);
+    }
+
+    updateChatRoom(room);
+
+    freeChatRoom(room);
+    free(room);
+
+    return 1;
+}
+
 int deleteMessageById(int messageId)
 {
     Message *message = getMessageById(messageId);
@@ -820,6 +933,39 @@ static ChatRoom jsonToChatRoom(cJSON *json)
             )->valueint;
     }
 
+    /*
+        Pending join requests.
+        requestIds is optional for compatibility with older JSON files.
+    */
+
+    cJSON *requests = cJSON_GetObjectItem(
+        json,
+        "requestIds"
+    );
+
+    if(cJSON_IsArray(requests))
+    {
+        room.requestCount = cJSON_GetArraySize(requests);
+
+        room.requestIds = malloc(
+            sizeof(int) * room.requestCount
+        );
+
+        for(int i = 0; i < room.requestCount; i++)
+        {
+            room.requestIds[i] =
+                cJSON_GetArrayItem(
+                    requests,
+                    i
+                )->valueint;
+        }
+    }
+    else
+    {
+        room.requestIds = NULL;
+        room.requestCount = 0;
+    }
+
     return room;
 }
 
@@ -954,15 +1100,41 @@ static ChatRoom cloneChatRoom(ChatRoom *room)
 
     copy.messageCount = room->messageCount;
 
-    copy.messageIds = malloc(
-        sizeof(int) * copy.messageCount
-    );
+    if(copy.messageCount > 0)
+    {
+        copy.messageIds = malloc(
+            sizeof(int) * copy.messageCount
+        );
 
-    memcpy(
-        copy.messageIds,
-        room->messageIds,
-        sizeof(int) * copy.messageCount
-    );
+        memcpy(
+            copy.messageIds,
+            room->messageIds,
+            sizeof(int) * copy.messageCount
+        );
+    }
+    else
+    {
+        copy.messageIds = NULL;
+    }
+
+    copy.requestCount = room->requestCount;
+
+    if(copy.requestCount > 0)
+    {
+        copy.requestIds = malloc(
+            sizeof(int) * copy.requestCount
+        );
+
+        memcpy(
+            copy.requestIds,
+            room->requestIds,
+            sizeof(int) * copy.requestCount
+        );
+    }
+    else
+    {
+        copy.requestIds = NULL;
+    }
 
     return copy;
 }

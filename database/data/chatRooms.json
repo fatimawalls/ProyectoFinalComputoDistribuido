@@ -26,7 +26,7 @@
 		"id":	6,
 		"name":	"prueban+1",
 		"coordinatorId":	2,
-		"userIds":	[2, 15],
+		"userIds":	[2],
 		"messageIds":	[3, 44, 45, 46, 47],
 		"requestIds":	[]
 	}, {
@@ -76,7 +76,8 @@
 		"name":	"general",
 		"coordinatorId":	10,
 		"userIds":	[10],
-		"messageIds":	[11]
+		"messageIds":	[11],
+		"requestIds":	[2]
 	}, {
 		"id":	16,
 		"name":	"papulandia/8",

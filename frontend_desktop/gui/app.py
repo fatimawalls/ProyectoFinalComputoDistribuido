@@ -664,7 +664,8 @@ class ChatClientGUI:
 
         if is_coord:
             if self.network:
-                requests_count = len(self.network.pending_join_requests.get(room_id, []))
+                room = self.network.rooms.get(room_id, {})
+                requests_count = len(room.get("requestIds", []))
             else:
                 requests_count = len(self.mock.get_join_requests(room_id))
             manage_text    = "⚙ Manage Room" + (f"  [{requests_count}]" if requests_count > 0 else "")

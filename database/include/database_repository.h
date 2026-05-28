@@ -10,6 +10,10 @@
 
 User createUser(const char *name, const char *password);
 
+User createUserWithNickname(const char *name, const char *password, const char *nickname);
+
+int usernameExists(const char *name);
+
 int saveUser(User *user);
 
 int addChatRoomToUser(int userId, int chatRoomId);

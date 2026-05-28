@@ -37,6 +37,8 @@ class AppController:
 
         self.network.on_user_online         = self.on_user_online_received
         self.network.on_user_offline        = self.on_user_offline_received
+        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
+        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # ARRANQUE DEL CONTROLLER
@@ -96,6 +98,7 @@ class AppController:
             self.login_window = None
 
         username = self.network.me.get("username", self.current_user or "")
+        nickname = self.network.me.get("nickname", username)
 
         # Reutilizamos la ventana raíz principal de Tkinter para el lobby
         self.root.deiconify()
@@ -103,7 +106,7 @@ class AppController:
         app = ChatClientGUI(
             self.root,
             username=username,
-            nickname=username,
+            nickname=nickname,
             network=self.network,
         )
 
@@ -111,16 +114,16 @@ class AppController:
         self._app = app
 
         # Conectar callbacks en tiempo real de mensajería hacia la GUI
-        self.network.on_new_message             = getattr(app, "on_new_message",          None)
-        self.network.on_room_created            = getattr(app, "on_room_created",         None)
-        self.network.on_user_added              = getattr(app, "on_user_added",           None)
-        self.network.on_user_removed            = getattr(app, "on_user_removed",         None)
-        self.network.on_message_deleted         = getattr(app, "on_message_deleted",      None)
-        self.network.on_room_deleted            = getattr(app, "on_room_deleted",         None)
-        self.network.on_join_request_sent       = getattr(app, "on_join_request_sent",    None)
-        self.network.on_join_request_received   = getattr(app, "on_join_request_received",None)
-        self.network.on_server_disconnected     = self.on_server_disconnected
-        self.network.on_user_offline            = self.on_user_offline_received
+        self.network.on_new_message         = getattr(app, "on_new_message",     None)
+        self.network.on_room_created        = getattr(app, "on_room_created",    None)
+        self.network.on_user_added          = getattr(app, "on_user_added",      None)
+        self.network.on_user_removed        = getattr(app, "on_user_removed",    None)
+        self.network.on_message_deleted     = getattr(app, "on_message_deleted", None)
+        self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
+        self.network.on_server_disconnected = self.on_server_disconnected
+        self.network.on_user_offline        = self.on_user_offline_received
+        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
+        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)
@@ -159,7 +162,7 @@ class AppController:
         self.current_user = user
         if not self._conectar():
             return
-        self.network.register(user, pwd)
+        self.network.register(user, pwd, nick or user)
         print(f"[CONTROLADOR] CREATE_ACCOUNT enviado para '{user}'.")
 
     # ─────────────────────────────────────────────────────────────
@@ -183,15 +186,18 @@ class AppController:
                 messagebox.showerror("Error de Autenticación", message, parent=self.root)
 
     def on_sync_complete_received(self):
-        """
-        El sync inicial ya trae TODO:
-        - usuarios
-        - salas
-        - mensajes
+        print("[CONTROLADOR] Sync completo → abriendo lobby con datos globales")
+        self.root.after(0, self.show_lobby)
 
-        Por eso ya no se hacen GET_USERS ni GET_ROOMS.
-        """
-        print("[CONTROLADOR] Sync completo → abriendo lobby con la base local cargada")
+
+    def on_all_users_loaded_received(self):
+        """Se dispara de forma asíncrona cuando GET_USERS terminó de recibirse."""
+        print("[CONTROLADOR] Lista completa de usuarios recibida")
+        self.root.after(0, self._try_open_lobby)
+
+    def on_all_rooms_loaded_received(self):
+        """Se dispara de forma asíncrona cuando GET_ROOMS terminó de recibirse."""
+        print("[CONTROLADOR] Lista completa de salas recibida")
         self.root.after(0, self._try_open_lobby)
 
     def _try_open_lobby(self):

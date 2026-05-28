@@ -167,14 +167,14 @@ class RegisterView(tk.Toplevel):
         self.on_go_login         = on_go_login
 
         self.title("PIMENTEL CO. // NEW USER REGISTRATION")
-        self.geometry("460x660")
+        self.geometry("460x720")
         self.resizable(False, False)
         self.configure(bg=BG_MAIN)
 
         self.update_idletasks()
         x = (self.winfo_screenwidth()  - 460) // 2
-        y = (self.winfo_screenheight() - 660) // 2
-        self.geometry(f"460x660+{x}+{y}")
+        y = (self.winfo_screenheight() - 720) // 2
+        self.geometry(f"460x720+{x}+{y}")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -198,6 +198,7 @@ class RegisterView(tk.Toplevel):
         form.pack(fill="both", expand=True, pady=10)
 
         self.entry_user    = make_input_field(form, "USERNAME")
+        self.entry_nick    = make_input_field(form, "DISPLAY NAME")
         self.entry_pass    = make_input_field(form, "PASSWORD", show="●")
         self.entry_confirm = make_input_field(form, "CONFIRM PASSWORD", show="●")
 
@@ -205,7 +206,8 @@ class RegisterView(tk.Toplevel):
                                   bg=BG_MAIN, fg=ERROR_COLOR)
         self.lbl_error.pack(anchor="w", pady=(8, 0))
 
-        self.entry_user.bind("<Return>",    lambda e: self.entry_pass.focus())
+        self.entry_user.bind("<Return>",    lambda e: self.entry_nick.focus())
+        self.entry_nick.bind("<Return>",    lambda e: self.entry_pass.focus())
         self.entry_pass.bind("<Return>",    lambda e: self.entry_confirm.focus())
         self.entry_confirm.bind("<Return>", lambda e: self._do_register())
 
@@ -235,6 +237,7 @@ class RegisterView(tk.Toplevel):
 
     def _do_register(self):
         user    = self.entry_user.get().strip()
+        nick    = self.entry_nick.get().strip()
         pwd     = self.entry_pass.get().strip()
         confirm = self.entry_confirm.get().strip()
 
@@ -244,6 +247,9 @@ class RegisterView(tk.Toplevel):
         if len(user) < 3:
             self.show_error("Username must be at least 3 characters.")
             self.entry_user.focus(); return
+        if not nick:
+            self.show_error("Display name cannot be empty.")
+            self.entry_nick.focus(); return
         if not pwd:
             self.show_error("Password cannot be empty.")
             self.entry_pass.focus(); return
@@ -257,7 +263,7 @@ class RegisterView(tk.Toplevel):
 
         self.show_error("")
         if self.on_register_success:
-            self.on_register_success(user, pwd)
+            self.on_register_success(user, pwd, nick)
 
     def _go_login(self):
         if self.on_go_login:

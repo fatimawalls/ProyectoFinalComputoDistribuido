@@ -41,64 +41,63 @@ static cJSON *chatRoomPayload(ChatRoom *room)
     cJSON_AddNumberToObject(chat, "coordinatorId", room->coordinatorId);
 
     cJSON *users = cJSON_CreateArray();
-
     for(int i = 0; i < room->userCount; i++)
     {
-        cJSON_AddItemToArray(
-            users,
-            cJSON_CreateNumber(room->userIds[i])
-        );
+        cJSON_AddItemToArray(users, cJSON_CreateNumber(room->userIds[i]));
     }
-
     cJSON_AddItemToObject(chat, "userIds", users);
 
     cJSON *messages = cJSON_CreateArray();
-
     for(int i = 0; i < room->messageCount; i++)
     {
-        cJSON_AddItemToArray(
-            messages,
-            cJSON_CreateNumber(room->messageIds[i])
-        );
+        cJSON_AddItemToArray(messages, cJSON_CreateNumber(room->messageIds[i]));
     }
-
     cJSON_AddItemToObject(chat, "messageIds", messages);
 
     cJSON *requests = cJSON_CreateArray();
-
     for(int i = 0; i < room->requestCount; i++)
     {
-        cJSON_AddItemToArray(
-            requests,
-            cJSON_CreateNumber(room->requestIds[i])
-        );
+        cJSON_AddItemToArray(requests, cJSON_CreateNumber(room->requestIds[i]));
     }
-
     cJSON_AddItemToObject(chat, "requestIds", requests);
 
     return chat;
 }
 
-static cJSON *intArrayPayload(int *items, int count)
+static cJSON *userPayload(User *user)
 {
-    cJSON *array = cJSON_CreateArray();
+    cJSON *json = cJSON_CreateObject();
 
-    for(int i = 0; i < count; i++)
+    cJSON_AddNumberToObject(json, "id", user->id);
+    cJSON_AddStringToObject(json, "username", user->name);
+    cJSON_AddStringToObject(json, "name", user->name);
+    cJSON_AddStringToObject(
+        json,
+        "nickname",
+        user->nickname ? user->nickname : user->name
+    );
+
+    return json;
+}
+
+static void addNotifyUsers(cJSON *json, int *notifyUsers, int notifyCount)
+{
+    cJSON *users = cJSON_CreateArray();
+
+    for(int i = 0; i < notifyCount; i++)
     {
-        cJSON_AddItemToArray(
-            array,
-            cJSON_CreateNumber(items[i])
-        );
+        cJSON_AddItemToArray(users, cJSON_CreateNumber(notifyUsers[i]));
     }
 
-    return array;
+    cJSON_AddItemToObject(json, "notifyUsers", users);
 }
 
 void sendAuthResponse(
     int clientSocket,
     int success,
     int userId,
-    const char *username
+    const char *username,
+    const char *nickname
 )
 {
     cJSON *json = cJSON_CreateObject();
@@ -128,6 +127,18 @@ void sendAuthResponse(
             "username",
             username
         );
+
+        cJSON_AddStringToObject(
+            json,
+            "nickname",
+            nickname ? nickname : username
+        );
+
+        cJSON_AddStringToObject(
+            json,
+            "nickname",
+            nickname ? nickname : username
+        );
     }
 
     sendJson(clientSocket, json);
@@ -139,7 +150,8 @@ void sendCreateAccountResponse(
     int clientSocket,
     int success,
     int userId,
-    const char *username
+    const char *username,
+    const char *nickname
 )
 {
     cJSON *json = cJSON_CreateObject();
@@ -155,7 +167,14 @@ void sendCreateAccountResponse(
         "success",
         success
     );
-
+    if(nickname)
+    {
+        cJSON_AddStringToObject(
+            json,
+            "nickname",
+            nickname
+        );
+    }
     if(success)
     {
         cJSON_AddNumberToObject(
@@ -224,36 +243,27 @@ void sendChatRoomJson(
     cJSON_Delete(json);
 }
 
+
 void sendChatUserJson(
     int clientSocket,
     int id,
-    const char *name
+    const char *username,
+    const char *nickname
 )
 {
     cJSON *json = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(
-        json,
-        "type",
-        "CHAT_USER"
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "id",
-        id
-    );
-
-    cJSON_AddStringToObject(
-        json,
-        "name",
-        name
-    );
+    cJSON_AddStringToObject(json, "type", "CHAT_USER");
+    cJSON_AddNumberToObject(json, "id", id);
+    cJSON_AddStringToObject(json, "username", username);
+    cJSON_AddStringToObject(json, "name", username);
+    cJSON_AddStringToObject(json, "nickname", nickname ? nickname : username);
 
     sendJson(clientSocket, json);
 
     cJSON_Delete(json);
 }
+
 
 void sendMessageJson(
     int clientSocket,
@@ -400,64 +410,22 @@ void sendNewChatRoomResponse(
     int notifyCount
 )
 {
-    cJSON *json =
-        cJSON_CreateObject();
+    cJSON *json = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(
-        json,
-        "type",
-        "NEW_CHATROOM_RESPONSE"
-    );
+    cJSON_AddStringToObject(json, "type", "NEW_CHATROOM_RESPONSE");
+    cJSON_AddNumberToObject(json, "success", success);
 
-    cJSON_AddNumberToObject(
-        json,
-        "success",
-        success
-    );
-
-    if(success)
+    if(success && room)
     {
-        /*
-            Chat room object
-        */
-
-        cJSON_AddItemToObject(
-            json,
-            "chatRoom",
-            chatRoomPayload(room)
-        );
-
-        /*
-            Notify users
-        */
-
-        cJSON *users =
-            cJSON_CreateArray();
-
-        for(int i = 0; i < notifyCount; i++)
-        {
-            cJSON_AddItemToArray(
-                users,
-                cJSON_CreateNumber(
-                    notifyUsers[i]
-                )
-            );
-        }
-
-        cJSON_AddItemToObject(
-            json,
-            "notifyUsers",
-            users
-        );
+        cJSON_AddItemToObject(json, "chatRoom", chatRoomPayload(room));
+        addNotifyUsers(json, notifyUsers, notifyCount);
     }
 
-    sendJson(
-        clientSocket,
-        json
-    );
+    sendJson(clientSocket, json);
 
     cJSON_Delete(json);
 }
+
 void sendUserChatRelationResponse(
     int clientSocket,
     const char *responseType,
@@ -472,101 +440,28 @@ void sendUserChatRelationResponse(
 {
     cJSON *json = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(
-        json,
-        "type",
-        responseType
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "success",
-        success
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "userId",
-        userId
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "chatRoomId",
-        chatRoomId
-    );
-
-    /*
-        Full chat room state after the mutation.
-        This lets the client update userIds and requestIds from one source.
-    */
-
-    if(room != NULL)
-    {
-        cJSON_AddItemToObject(
-            json,
-            "chatRoom",
-            chatRoomPayload(room)
-        );
-
-        cJSON_AddItemToObject(
-            json,
-            "userIds",
-            intArrayPayload(room->userIds, room->userCount)
-        );
-
-        cJSON_AddItemToObject(
-            json,
-            "requestIds",
-            intArrayPayload(room->requestIds, room->requestCount)
-        );
-    }
-
-    /*
-        Added/requesting user info
-    */
+    cJSON_AddStringToObject(json, "type", responseType);
+    cJSON_AddNumberToObject(json, "success", success);
+    cJSON_AddNumberToObject(json, "userId", userId);
+    cJSON_AddNumberToObject(json, "chatRoomId", chatRoomId);
 
     if(chatUser != NULL)
     {
-        cJSON *user =
-            cJSON_CreateObject();
-
-        cJSON_AddNumberToObject(
-            user,
-            "id",
-            chatUser->id
-        );
-
-        cJSON_AddStringToObject(
-            user,
-            "username",
-            chatUser->name
-        );
-
-        cJSON_AddItemToObject(
-            json,
-            "chatUser",
-            user
-        );
+        cJSON_AddItemToObject(json, "chatUser", userPayload(chatUser));
     }
 
-    /*
-        Notify users
-    */
+    if(room != NULL)
+    {
+        cJSON_AddItemToObject(json, "chatRoom", chatRoomPayload(room));
+    }
 
-    cJSON_AddItemToObject(
-        json,
-        "notifyUsers",
-        intArrayPayload(notifyUsers, notifyCount)
-    );
+    addNotifyUsers(json, notifyUsers, notifyCount);
 
-    sendJson(
-        clientSocket,
-        json
-    );
+    sendJson(clientSocket, json);
 
     cJSON_Delete(json);
 }
+
 void sendDeleteResponse(
     int clientSocket,
     const char *responseType,
@@ -613,65 +508,27 @@ void sendDeleteRequestResponseJson(
 {
     cJSON *json = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(
-        json,
-        "type",
-        "DELETE_REQUEST_RESPONSE"
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "success",
-        success
-    );
-
-    cJSON_AddNumberToObject(
-        json,
-        "userId",
-        userId
-    );
+    cJSON_AddStringToObject(json, "type", "DELETE_REQUEST_RESPONSE");
+    cJSON_AddNumberToObject(json, "success", success);
+    cJSON_AddNumberToObject(json, "userId", userId);
 
     if(chatRoom)
     {
-        cJSON *roomJson =
-            chatRoomPayload(
-                chatRoom
-            );
+        cJSON_AddNumberToObject(json, "chatRoomId", chatRoom->id);
+        cJSON_AddItemToObject(json, "chatRoom", chatRoomPayload(chatRoom));
 
-        cJSON_AddItemToObject(
-            json,
-            "chatRoom",
-            roomJson
-        );
+        int notifyUsers[2];
+        notifyUsers[0] = chatRoom->coordinatorId;
+        notifyUsers[1] = userId;
 
-        cJSON *notifyUsers =
-            cJSON_CreateArray();
-
-        cJSON_AddItemToArray(
-            notifyUsers,
-            cJSON_CreateNumber(
-                chatRoom->coordinatorId
-            )
-        );
-
-        cJSON_AddItemToArray(
-            notifyUsers,
-            cJSON_CreateNumber(
-                userId
-            )
-        );
-
-        cJSON_AddItemToObject(
-            json,
-            "notifyUsers",
-            notifyUsers
-        );
+        addNotifyUsers(json, notifyUsers, 2);
+    }
+    else
+    {
+        addNotifyUsers(json, NULL, 0);
     }
 
-    sendJson(
-        clientSocket,
-        json
-    );
+    sendJson(clientSocket, json);
 
     cJSON_Delete(json);
 }

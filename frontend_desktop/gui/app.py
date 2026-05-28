@@ -297,7 +297,7 @@ class ChatClientGUI:
         if self.network:
             u = self.network.users.get(user_id)
             if u:
-                return u.get("name", str(user_id))
+                return u.get("nickname") or u.get("name") or u.get("username") or str(user_id)
         return str(user_id)
 
     def _is_coordinator(self, room_id):
@@ -310,7 +310,7 @@ class ChatClientGUI:
         if self.network:
             my_id = self.network.me.get("id")
             return [
-                {"username": str(u["id"]), "nickname": u.get("name", "?"), "online": True}
+                {"username": str(u["id"]), "nickname": u.get("nickname") or u.get("name") or u.get("username") or "?", "online": True}
                 for u in self.network.users.values()
                 if u["id"] != my_id
             ]
@@ -664,8 +664,8 @@ class ChatClientGUI:
 
         if is_coord:
             if self.network:
-                room = self.network.rooms.get(room_id, {})
-                requests_count = len(room.get("requestIds", []))
+                room_for_requests = self.network.rooms.get(room_id, {})
+                requests_count = len(room_for_requests.get("requestIds", []))
             else:
                 requests_count = len(self.mock.get_join_requests(room_id))
             manage_text    = "⚙ Manage Room" + (f"  [{requests_count}]" if requests_count > 0 else "")
@@ -792,7 +792,7 @@ class ChatClientGUI:
             user_ids_list = room.get("userIds", [])
             for u_id in user_ids_list:
                 # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
-                user_info = self.network.users.get(u_id, {})
+                user_info = self.users.get(u_id, {}) if hasattr(self, 'users') else {}
                 user_name = user_info.get("name", "Desconocido")
                 lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
         else:
@@ -836,20 +836,16 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def leave_room(self, room_id):
-        room = self._get_room(room_id)
-        if not room:
-            return
+        room = self.mock.get_room(room_id)
         if self.confirm_dialog("LEAVE ROOM", f"Are you sure you want to leave '{room['name']}'?"):
-            if self.network:
-                self.network.leave_room(room_id)
-            else:
-                self.mock.kick_user(room_id, self.username)
-                self.mock.messages.setdefault(room_id, []).append(
-                    ("__SYSTEM__", f"{self.nickname} has left the room.")
-                )
-                self.current_room = None
-                self.refresh_sidebar()
-                self.show_welcome_view()
+            # AQUÍ IRÍA: self.network.send("LOBBY_LEAVE_ROOM", room_id)
+            self.mock.kick_user(room_id, self.username)
+            self.mock.messages.setdefault(room_id, []).append(
+                ("__SYSTEM__", f"{self.nickname} has left the room.")
+            )
+            self.current_room = None
+            self.refresh_sidebar()
+            self.show_welcome_view()
 
     # ─────────────────────────────────────────────
     #  COORDINATOR PANEL
@@ -907,7 +903,7 @@ class ChatClientGUI:
             room_user_ids = set(room.get("userIds", []))
             my_id = self.network.me.get("id")
             addable = [
-                (uid, udata.get("name", f"User_{uid}"))
+                (uid, udata.get("nickname") or udata.get("name") or udata.get("username") or f"User_{uid}")
                 for uid, udata in self.network.users.items()
                 if uid not in room_user_ids
             ]
@@ -963,7 +959,10 @@ class ChatClientGUI:
             requests_list = [
                 {
                     "userId": uid,
-                    "nickname": self.network.users.get(uid, {}).get("name", f"User_{uid}")
+                    "nickname": self.network.users.get(uid, {}).get("nickname")
+                                or self.network.users.get(uid, {}).get("name")
+                                or self.network.users.get(uid, {}).get("username")
+                                or f"User_{uid}"
                 }
                 for uid in room.get("requestIds", [])
             ]
@@ -1020,7 +1019,10 @@ class ChatClientGUI:
         if self.network:
             coord_id = room.get("coordinatorId")
             display_members = [
-                (m_id, self.network.users.get(m_id, {}).get("name", f"User_{m_id}"))
+                (m_id, self.network.users.get(m_id, {}).get("nickname")
+                       or self.network.users.get(m_id, {}).get("name")
+                       or self.network.users.get(m_id, {}).get("username")
+                       or f"User_{m_id}")
                 for m_id in room.get("userIds", [])
                 if m_id != coord_id          # el coordinador no se patea a sí mismo
             ]
@@ -1316,42 +1318,14 @@ class ChatClientGUI:
             self.network.request_join_room(room_id)
             self.pending_rooms.add(room_id)
             self.show_private_room_view(room_id)
+            return
+
+        success = self.mock.request_join(room_id)
+        if success:
+            self.pending_rooms.add(room_id)
+            self.show_private_room_view(room_id)
         else:
-            success = self.mock.request_join(room_id)
-            if success:
-                self.pending_rooms.add(room_id)
-                self.show_private_room_view(room_id)
-            else:
-                self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
-
-    def on_join_request_sent(self, room_id, success):
-        """Callback: el servidor confirmó (o rechazó) el envío de la solicitud."""
-        def _update():
-            if not success:
-                self.pending_rooms.discard(room_id)
-                self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
-                if self.current_room == room_id:
-                    self.show_private_room_view(room_id)
-        self.root.after(0, _update)
-
-    def on_join_request_received(self, room_id, requester_id, requester_name):
-        def _update():
-            room = self._get_room(room_id)
-            room_name = room["name"] if room else str(room_id)
-
-            # Only show toast for new requests (requester_name is not empty)
-            if requester_name:
-                self.show_toast(
-                    room_id, room_name,
-                    "◆ Join Request",
-                    f"{requester_name} wants to join #{room_name}",
-                )
-
-            # Refresh chat header (pending count badge) if this room is open
-            if self.current_room == room_id:
-                self.show_chat_view(room_id)
-
-        self.root.after(0, _update)
+            self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
 
     # ─────────────────────────────────────────────
     #  CHANNEL SELECT

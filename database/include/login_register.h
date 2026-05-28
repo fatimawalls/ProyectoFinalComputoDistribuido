@@ -10,7 +10,8 @@ User *authenticateUser(
 
 int registerUser(
     const char *name,
-    const char *password
+    const char *password,
+    const char *nickname
 );
 
 #endif

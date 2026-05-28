@@ -40,6 +40,7 @@ void handleAuth(
             clientSocket,
             0,
             0,
+            NULL,
             NULL
         );
 
@@ -50,44 +51,27 @@ void handleAuth(
         clientSocket,
         1,
         user->id,
-        user->name
+        user->name,
+        user->nickname
     );
 
     sendSyncStart(clientSocket);
 
-    /*
-        Full database sync.
-
-        Antes:
-            Solo se mandaban los chatrooms relacionados al usuario.
-
-        Ahora:
-            Se mandan todos los usuarios, todos los chatrooms
-            y todos los mensajes.
-    */
-
     int userCount = 0;
-
-    User *users =
-        getAllUsers(
-            &userCount
-        );
+    User *users = getAllUsers(&userCount);
 
     for(int i = 0; i < userCount; i++)
     {
         sendChatUserJson(
             clientSocket,
             users[i].id,
-            users[i].name
+            users[i].name,
+            users[i].nickname
         );
     }
 
     int roomCount = 0;
-
-    ChatRoom *rooms =
-        getAllChatRooms(
-            &roomCount
-        );
+    ChatRoom *rooms = getAllChatRooms(&roomCount);
 
     for(int i = 0; i < roomCount; i++)
     {
@@ -98,11 +82,7 @@ void handleAuth(
     }
 
     int msgCount = 0;
-
-    Message *messages =
-        getAllMessages(
-            &msgCount
-        );
+    Message *messages = getAllMessages(&msgCount);
 
     for(int i = 0; i < msgCount; i++)
     {
@@ -119,26 +99,17 @@ void handleAuth(
 
     if(users)
     {
-        freeUsers(
-            users,
-            userCount
-        );
+        freeUsers(users, userCount);
     }
 
     if(rooms)
     {
-        freeChatRooms(
-            rooms,
-            roomCount
-        );
+        freeChatRooms(rooms, roomCount);
     }
 
     if(messages)
     {
-        freeMessages(
-            messages,
-            msgCount
-        );
+        freeMessages(messages, msgCount);
     }
 
     freeUser(user);
@@ -151,33 +122,63 @@ void handleCreateAccount(
     cJSON *request
 )
 {
-    const char *username =
+    cJSON *usernameItem =
         cJSON_GetObjectItem(
             request,
             "username"
-        )->valuestring;
+        );
 
-    const char *password =
+    cJSON *passwordItem =
         cJSON_GetObjectItem(
             request,
             "password"
-        )->valuestring;
-
-    User user =
-        createUser(
-            username,
-            password
         );
 
-    saveUser(&user);
+    cJSON *nicknameItem =
+        cJSON_GetObjectItem(
+            request,
+            "nickname"
+        );
+
+    if(
+        !cJSON_IsString(usernameItem) ||
+        !cJSON_IsString(passwordItem)
+    )
+    {
+        sendCreateAccountResponse(
+            clientSocket,
+            0,
+            0,
+            NULL,
+            NULL
+        );
+
+        return;
+    }
+
+    const char *username = usernameItem->valuestring;
+    const char *password = passwordItem->valuestring;
+    const char *nickname =
+        cJSON_IsString(nicknameItem)
+            ? nicknameItem->valuestring
+            : username;
+
+    int userId =
+        registerUser(
+            username,
+            password,
+            nickname
+        );
 
     sendCreateAccountResponse(
         clientSocket,
-        1,
-        user.id,
-        user.name
+        userId > 0,
+        userId,
+        username,
+        nickname
     );
 }
+
 void handleNewMessage(
     int clientSocket,
     cJSON *request
@@ -281,79 +282,6 @@ void handleNewChatRoom(
         1
     );
 }
-void handleJoinRequest(
-    int clientSocket,
-    cJSON *request
-)
-{
-    int userId =
-        cJSON_GetObjectItem(
-            request,
-            "userId"
-        )->valueint;
-
-    int chatRoomId =
-        cJSON_GetObjectItem(
-            request,
-            "chatRoomId"
-        )->valueint;
-
-    int success =
-        addJoinRequestToChatRoom(
-            userId,
-            chatRoomId
-        );
-
-    ChatRoom *room =
-        getChatRoomById(chatRoomId);
-
-    if(!room)
-    {
-        sendUserChatRelationResponse(
-            clientSocket,
-            "REQUEST_RESPONSE",
-            0,
-            userId,
-            chatRoomId,
-            NULL,
-            NULL,
-            NULL,
-            0
-        );
-
-        return;
-    }
-
-    User *requestUser =
-        getUserById(userId);
-
-    /*
-        Notify the current room members, especially the coordinator.
-        The client will decide whether to show a visual notification.
-    */
-
-    sendUserChatRelationResponse(
-        clientSocket,
-        "REQUEST_RESPONSE",
-        success,
-        userId,
-        chatRoomId,
-        requestUser,
-        room,
-        room->userIds,
-        room->userCount
-    );
-
-    if(requestUser)
-    {
-        freeUser(requestUser);
-        free(requestUser);
-    }
-
-    freeChatRoom(room);
-    free(room);
-}
-
 void handleAddUser(
     int clientSocket,
     cJSON *request
@@ -398,7 +326,17 @@ void handleAddUser(
     }
 
     User *addedUser =
-    getUserById(userId);
+        getUserById(userId);
+
+    int notifyUsers[2];
+    int notifyCount = 0;
+
+    notifyUsers[notifyCount++] = room->coordinatorId;
+
+    if(userId != room->coordinatorId)
+    {
+        notifyUsers[notifyCount++] = userId;
+    }
 
     sendUserChatRelationResponse(
         clientSocket,
@@ -408,8 +346,8 @@ void handleAddUser(
         chatRoomId,
         addedUser,
         room,
-        room->userIds,
-        room->userCount
+        notifyUsers,
+        notifyCount
     );
 
     if(addedUser)
@@ -421,6 +359,7 @@ void handleAddUser(
     freeChatRoom(room);
     free(room);
 }
+
 void handleRemoveUser(
     int clientSocket,
     cJSON *request
@@ -467,9 +406,6 @@ void handleRemoveUser(
             chatRoomId
         );
 
-    ChatRoom *roomAfter =
-        getChatRoomById(chatRoomId);
-
     sendUserChatRelationResponse(
         clientSocket,
         "REMOVE_USER_RESPONSE",
@@ -477,19 +413,158 @@ void handleRemoveUser(
         userId,
         chatRoomId,
         NULL,
-        roomAfter,
+        NULL,
         notifyUsers,
         notifyCount
     );
 
-    if(roomAfter)
-    {
-        freeChatRoom(roomAfter);
-        free(roomAfter);
-    }
-
     free(notifyUsers);
 }
+void handleJoinRequest(
+    int clientSocket,
+    cJSON *request
+)
+{
+    cJSON *chatRoomIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "chatRoomId"
+        );
+
+    cJSON *userIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "userId"
+        );
+
+    if(
+        !cJSON_IsNumber(chatRoomIdItem) ||
+        !cJSON_IsNumber(userIdItem)
+    )
+    {
+        sendUserChatRelationResponse(
+            clientSocket,
+            "REQUEST_RESPONSE",
+            0,
+            0,
+            0,
+            NULL,
+            NULL,
+            NULL,
+            0
+        );
+
+        return;
+    }
+
+    int chatRoomId = chatRoomIdItem->valueint;
+    int userId = userIdItem->valueint;
+
+    int success =
+        addJoinRequestToChatRoom(
+            userId,
+            chatRoomId
+        );
+
+    ChatRoom *room =
+        getChatRoomById(chatRoomId);
+
+    User *requestUser =
+        getUserById(userId);
+
+    int notifyUsers[2];
+    int notifyCount = 0;
+
+    if(room)
+    {
+        notifyUsers[notifyCount++] = room->coordinatorId;
+    }
+
+    notifyUsers[notifyCount++] = userId;
+
+    sendUserChatRelationResponse(
+        clientSocket,
+        "REQUEST_RESPONSE",
+        success,
+        userId,
+        chatRoomId,
+        requestUser,
+        room,
+        notifyUsers,
+        notifyCount
+    );
+
+    if(requestUser)
+    {
+        freeUser(requestUser);
+        free(requestUser);
+    }
+
+    if(room)
+    {
+        freeChatRoom(room);
+        free(room);
+    }
+}
+
+void handleDeleteRequest(
+    int clientSocket,
+    cJSON *request
+)
+{
+    cJSON *chatRoomIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "chatRoomId"
+        );
+
+    cJSON *userIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "userId"
+        );
+
+    if(
+        !cJSON_IsNumber(chatRoomIdItem) ||
+        !cJSON_IsNumber(userIdItem)
+    )
+    {
+        sendDeleteRequestResponseJson(
+            clientSocket,
+            0,
+            NULL,
+            0
+        );
+
+        return;
+    }
+
+    int chatRoomId = chatRoomIdItem->valueint;
+    int userId = userIdItem->valueint;
+
+    int success =
+        removeJoinRequestFromChatRoom(
+            userId,
+            chatRoomId
+        );
+
+    ChatRoom *room =
+        getChatRoomById(chatRoomId);
+
+    sendDeleteRequestResponseJson(
+        clientSocket,
+        success,
+        room,
+        userId
+    );
+
+    if(room)
+    {
+        freeChatRoom(room);
+        free(room);
+    }
+}
+
 void handleDeleteMessage(
     int clientSocket,
     cJSON *request
@@ -608,73 +683,6 @@ void handleDeleteChatRoom(
         notifyCount
     );
 }
-void handleDeleteRequest(
-    int clientSocket,
-    cJSON *request
-)
-{
-    cJSON *chatRoomIdItem =
-        cJSON_GetObjectItem(
-            request,
-            "chatRoomId"
-        );
-
-    cJSON *userIdItem =
-        cJSON_GetObjectItem(
-            request,
-            "userId"
-        );
-
-    if(
-        !cJSON_IsNumber(chatRoomIdItem) ||
-        !cJSON_IsNumber(userIdItem)
-    )
-    {
-        sendDeleteRequestResponseJson(
-            clientSocket,
-            0,
-            NULL,
-            0
-        );
-
-        return;
-    }
-
-    int chatRoomId =
-        chatRoomIdItem->valueint;
-
-    int userId =
-        userIdItem->valueint;
-
-    int removed =
-        removeRequestFromChatRoom(
-            chatRoomId,
-            userId
-        );
-
-    ChatRoom *chatRoom = NULL;
-
-    if(removed)
-    {
-        chatRoom =
-            getChatRoomById(
-                chatRoomId
-            );
-    }
-
-    sendDeleteRequestResponseJson(
-        clientSocket,
-        removed,
-        chatRoom,
-        userId
-    );
-
-    if(chatRoom)
-    {
-        freeChatRoom(chatRoom);
-        free(chatRoom);
-    }
-}
 void handleRequest(
     int clientSocket,
     const char *requestText
@@ -755,6 +763,13 @@ void handleRequest(
             request
         );
     }
+    else if(strcmp(type, "DELETE_REQUEST") == 0)
+    {
+        handleDeleteRequest(
+            clientSocket,
+            request
+        );
+    }
     else if(strcmp(type, "ADD_USER") == 0)
     {
         handleAddUser(
@@ -779,13 +794,6 @@ void handleRequest(
     else if(strcmp(type, "DELETE_CHATROOM") == 0)
     {
         handleDeleteChatRoom(
-            clientSocket,
-            request
-        );
-    }
-    else if(strcmp(type, "DELETE_REQUEST") == 0)
-    {
-        handleDeleteRequest(
             clientSocket,
             request
         );

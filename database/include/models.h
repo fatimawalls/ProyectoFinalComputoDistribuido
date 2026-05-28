@@ -4,7 +4,8 @@
 typedef struct {
     int id;
 
-    char *name;
+    char *name;      /* username, must be unique */
+    char *nickname;  /* display name, can repeat */
     char *password;
 
     int *chatRoomIds;

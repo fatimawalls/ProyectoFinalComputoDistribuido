@@ -12,14 +12,16 @@ void sendAuthResponse(
     int clientSocket,
     int success,
     int userId,
-    const char *username
+    const char *username,
+    const char *nickname
 );
 
 void sendCreateAccountResponse(
     int clientSocket,
     int success,
     int userId,
-    const char *username
+    const char *username,
+    const char *nickname
 );
 
 void sendSyncStart(
@@ -38,7 +40,8 @@ void sendChatRoomJson(
 void sendChatUserJson(
     int clientSocket,
     int id,
-    const char *name
+    const char *username,
+    const char *nickname
 );
 
 void sendMessageJson(

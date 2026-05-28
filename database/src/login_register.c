@@ -6,6 +6,7 @@
 #include "constants.h"        
 #include "json_utils.h"       
 #include "database_repository.h"
+#include "memory_utils.h"
 
 
 User *authenticateUser(
@@ -44,26 +45,44 @@ User *authenticateUser(
     return NULL;
 }
 
-int registerUser(const char *name, const char *password) {
+int registerUser(
+    const char *name,
+    const char *password,
+    const char *nickname
+)
+{
     int count = 0;
+
     User *users = getAllUsers(&count);
 
-    if (users != NULL) {
-        for (int i = 0; i < count; i++) {
-            // Verificamos que el nombre no sea NULL antes de comparar
-            if (users[i].name == NULL) {
-                break; 
-            }
-            if (strcmp(users[i].name, name) == 0) {
-                free(users);
-                return 0; 
+    if(users != NULL)
+    {
+        for(int i = 0; i < count; i++)
+        {
+            if(users[i].name && strcmp(users[i].name, name) == 0)
+            {
+                freeUsers(users, count);
+                return 0;
             }
         }
-        free(users);
-    }
-    User nuevo = createUser(name, password);
-    
-    int resultado = saveUser(&nuevo);
 
-    return resultado; 
+        freeUsers(users, count);
+    }
+
+    User nuevo =
+        createUserWithNickname(
+            name,
+            password,
+            nickname
+        );
+
+    int resultado =
+        saveUser(&nuevo);
+
+    int id =
+        resultado ? nuevo.id : 0;
+
+    freeUser(&nuevo);
+
+    return id;
 }

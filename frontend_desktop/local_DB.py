@@ -22,6 +22,7 @@ from cifrado import cifrar_texto, descifrar_texto
 class Friend:
     id: int
     username: str
+    nickname: str = ""
 
 
 @dataclass
@@ -136,22 +137,41 @@ def dictToFriend(data: dict) -> Friend:
     if username is None:
         username = data.get("name", "")
 
+    nickname = data.get("nickname")
+
+    if nickname is None or nickname == "":
+        nickname = username
+
     username = descifrar_texto(username)
+    nickname = descifrar_texto(nickname)
 
     return Friend(
         id=data["id"],
-        username=username
+        username=username,
+        nickname=nickname
     )
 
 
 def dictToChat(data: dict) -> ChatRoom:
+    if "chatRoom" in data:
+        data = data["chatRoom"]
+
+    user_ids = list(data.get("userIds", []))
+    message_ids = list(data.get("messageIds", []))
+    request_ids = list(data.get("requestIds", []))
+
+    coordinator_id = data["coordinatorId"]
+
+    if coordinator_id not in user_ids:
+        user_ids.append(coordinator_id)
+
     return ChatRoom(
         id=data["id"],
         name=descifrar_texto(data["name"]),
-        coordinatorId=data["coordinatorId"],
-        userIds=list(data.get("userIds", [])),
-        messageIds=list(data.get("messageIds", [])),
-        requestIds=list(data.get("requestIds", [])),
+        coordinatorId=coordinator_id,
+        userIds=user_ids,
+        messageIds=message_ids,
+        requestIds=request_ids,
         unreadCount=data.get("unreadCount", 0)
     )
 
@@ -181,6 +201,7 @@ def addFriend(friend: Friend) -> Friend:
 
     if existing:
         existing.username = friend.username
+        existing.nickname = friend.nickname
         return existing
 
     friends.append(friend)
@@ -378,35 +399,6 @@ def addUser(chatRoomId: int, userId: int, chatUser=None):
     return chatRoom
 
 
-def requestJoin(chatRoomId: int, userId: int, chatUser=None):
-    """
-    Handles REQUEST / REQUEST_RESPONSE locally.
-
-    Adds userId to the chat room pending requestIds list.
-    Does not add the user as a member.
-    """
-
-    chatRoom = chatRoomsById.get(chatRoomId)
-
-    if not chatRoom:
-        return None
-
-    if userId not in chatRoom.userIds and userId not in chatRoom.requestIds:
-        chatRoom.requestIds.append(userId)
-
-    if chatUser is not None:
-        if isinstance(chatUser, Friend):
-            addFriend(chatUser)
-
-        elif isinstance(chatUser, str):
-            addFriend(strToFriend(chatUser))
-
-        elif isinstance(chatUser, dict):
-            addFriend(dictToFriend(chatUser))
-
-    return chatRoom
-
-
 def removeUser(chatRoomId: int, userId: int):
     """
     Handles REMOVE_USER notification/response locally.
@@ -569,6 +561,26 @@ def deleteChatRoom(chatRoomId: int):
     return chatRoom
 
 
+def deleteRequest(chatRoomId: int, userId: int):
+    """
+    Removes userId from a chat room's requestIds list.
+
+    Returns:
+    - ChatRoom
+    - None if chat room does not exist locally
+    """
+
+    chatRoom = chatRoomsById.get(chatRoomId)
+
+    if not chatRoom:
+        return None
+
+    if userId in chatRoom.requestIds:
+        chatRoom.requestIds.remove(userId)
+
+    return chatRoom
+
+
 def openChat(chatRoomId: int):
     """
     Marks a chat room as opened/read.
@@ -669,29 +681,6 @@ def applyServerJson(jsonString: str):
             increaseUnread=True
         )
 
-    if objType in ("REQUEST_RESPONSE", "REQUEST_NOTIFICATION"):
-        if not data.get("success", 0):
-            return None
-
-        chatRoomData = data.get("chatRoom")
-
-        if chatRoomData:
-            return newChatRoom(chatRoomData)
-
-        return requestJoin(
-            chatRoomId=data["chatRoomId"],
-            userId=data["userId"],
-            chatUser=data.get("chatUser")
-        )
-    if objType in ("DELETE_REQUEST_RESPONSE"):
-        chat_room_data = data.get("chatRoom")
-
-        if chat_room_data:
-            return addChatRoomObject(
-                dictToChat(chat_room_data)
-            )
-
-        return None
     if objType in ("ADD_USER_RESPONSE", "ADD_USER_NOTIFICATION"):
         if not data.get("success", 0):
             return None
@@ -699,7 +688,7 @@ def applyServerJson(jsonString: str):
         chatRoomData = data.get("chatRoom")
 
         if chatRoomData:
-            return newChatRoom(chatRoomData)
+            addChatRoomObject(dictToChat(chatRoomData))
 
         return addUser(
             chatRoomId=data["chatRoomId"],
@@ -707,14 +696,34 @@ def applyServerJson(jsonString: str):
             chatUser=data.get("chatUser")
         )
 
-    if objType in ("REMOVE_USER_RESPONSE", "REMOVE_USER_NOTIFICATION"):
+    if objType in ("REQUEST_RESPONSE", "REQUEST_NOTIFICATION"):
         if not data.get("success", 0):
             return None
 
         chatRoomData = data.get("chatRoom")
 
         if chatRoomData:
-            return newChatRoom(chatRoomData)
+            return addChatRoomObject(dictToChat(chatRoomData))
+
+        return None
+
+    if objType in ("DELETE_REQUEST_RESPONSE", "DELETE_REQUEST_NOTIFICATION"):
+        if not data.get("success", 0):
+            return None
+
+        chatRoomData = data.get("chatRoom")
+
+        if chatRoomData:
+            return addChatRoomObject(dictToChat(chatRoomData))
+
+        return deleteRequest(
+            data.get("chatRoomId"),
+            data.get("userId")
+        )
+
+    if objType in ("REMOVE_USER_RESPONSE", "REMOVE_USER_NOTIFICATION"):
+        if not data.get("success", 0):
+            return None
 
         return removeUser(
             chatRoomId=data["chatRoomId"],

@@ -119,6 +119,16 @@ static cJSON *userToJson(User *user)
 
     cJSON_AddStringToObject(
         json,
+        "username",
+        user->name);
+
+    cJSON_AddStringToObject(
+        json,
+        "nickname",
+        user->nickname ? user->nickname : user->name);
+
+    cJSON_AddStringToObject(
+        json,
         "password",
         user->password);
 
@@ -139,13 +149,23 @@ static cJSON *userToJson(User *user)
     return json;
 }
 
-User createUser(const char *name, const char *password)
+User createUserWithNickname(
+    const char *name,
+    const char *password,
+    const char *nickname
+)
 {
     User user;
 
     user.id = getNextUserId();
 
     user.name = strdup(name);
+
+    user.nickname = strdup(
+        nickname && nickname[0] != '\0'
+            ? nickname
+            : name
+    );
 
     user.password = strdup(password);
 
@@ -154,6 +174,40 @@ User createUser(const char *name, const char *password)
     user.chatRoomCount = 0;
 
     return user;
+}
+
+User createUser(const char *name, const char *password)
+{
+    return createUserWithNickname(
+        name,
+        password,
+        name
+    );
+}
+
+int usernameExists(const char *name)
+{
+    int count = 0;
+
+    User *users = getAllUsers(&count);
+
+    if(!users)
+    {
+        return 0;
+    }
+
+    for(int i = 0; i < count; i++)
+    {
+        if(users[i].name && strcmp(users[i].name, name) == 0)
+        {
+            freeUsers(users, count);
+            return 1;
+        }
+    }
+
+    freeUsers(users, count);
+
+    return 0;
 }
 
 int saveUser(User *user)
@@ -637,16 +691,14 @@ int addUserToChatRoom(int userId, int chatRoomId)
     }
 
     /*
-        If this user had requested access before, remove the pending request.
+        Remove pending join request if it exists.
     */
 
-    if (containsInt(room->requestIds, room->requestCount, userId))
-    {
-        removeIntFromArray(
-            &room->requestIds,
-            &room->requestCount,
-            userId);
-    }
+    removeIntFromArray(
+        &room->requestIds,
+        &room->requestCount,
+        userId
+    );
 
     /*
         Save changes
@@ -670,19 +722,18 @@ int addUserToChatRoom(int userId, int chatRoomId)
 
     return 1;
 }
-
 int addJoinRequestToChatRoom(int userId, int chatRoomId)
 {
     User *user = getUserById(userId);
 
-    if (!user)
+    if(!user)
     {
         return 0;
     }
 
     ChatRoom *room = getChatRoomById(chatRoomId);
 
-    if (!room)
+    if(!room)
     {
         freeUser(user);
         free(user);
@@ -690,38 +741,29 @@ int addJoinRequestToChatRoom(int userId, int chatRoomId)
         return 0;
     }
 
-    /*
-        If the user is already a member, there is no pending request to add.
-    */
-
-    if (containsInt(room->userIds, room->userCount, userId))
+    if(containsInt(room->userIds, room->userCount, userId))
     {
         freeUser(user);
         free(user);
-
         freeChatRoom(room);
         free(room);
 
         return 1;
     }
 
-    /*
-        Add user to pending requests if it is not already there.
-    */
-
-    if (!containsInt(room->requestIds, room->requestCount, userId))
+    if(!containsInt(room->requestIds, room->requestCount, userId))
     {
         room->requestIds = appendIntToArray(
             room->requestIds,
             &room->requestCount,
-            userId);
+            userId
+        );
     }
 
     updateChatRoom(room);
 
     freeUser(user);
     free(user);
-
     freeChatRoom(room);
     free(room);
 
@@ -732,25 +774,37 @@ int removeJoinRequestFromChatRoom(int userId, int chatRoomId)
 {
     ChatRoom *room = getChatRoomById(chatRoomId);
 
-    if (!room)
+    if(!room)
     {
         return 0;
     }
 
-    if (containsInt(room->requestIds, room->requestCount, userId))
-    {
-        removeIntFromArray(
-            &room->requestIds,
-            &room->requestCount,
-            userId);
-    }
+    int removed = removeIntFromArray(
+        &room->requestIds,
+        &room->requestCount,
+        userId
+    );
 
-    updateChatRoom(room);
+    if(removed)
+    {
+        updateChatRoom(room);
+    }
 
     freeChatRoom(room);
     free(room);
 
-    return 1;
+    return removed;
+}
+
+int removeRequestFromChatRoom(
+    int chatRoomId,
+    int userId
+)
+{
+    return removeJoinRequestFromChatRoom(
+        userId,
+        chatRoomId
+    );
 }
 
 int deleteMessageById(int messageId)
@@ -827,11 +881,30 @@ static User jsonToUser(cJSON *json)
         "id"
     )->valueint;
 
-    user.name = strdup(
-        cJSON_GetObjectItem(
+    cJSON *nameJson = cJSON_GetObjectItem(
+        json,
+        "name"
+    );
+
+    if(!nameJson)
+    {
+        nameJson = cJSON_GetObjectItem(
             json,
-            "name"
-        )->valuestring
+            "username"
+        );
+    }
+
+    user.name = strdup(
+        nameJson ? nameJson->valuestring : ""
+    );
+
+    cJSON *nicknameJson = cJSON_GetObjectItem(
+        json,
+        "nickname"
+    );
+
+    user.nickname = strdup(
+        nicknameJson ? nicknameJson->valuestring : user.name
     );
 
     user.password = strdup(
@@ -934,8 +1007,7 @@ static ChatRoom jsonToChatRoom(cJSON *json)
     }
 
     /*
-        Pending join requests.
-        requestIds is optional for compatibility with older JSON files.
+        Requests
     */
 
     cJSON *requests = cJSON_GetObjectItem(
@@ -962,8 +1034,8 @@ static ChatRoom jsonToChatRoom(cJSON *json)
     }
     else
     {
-        room.requestIds = NULL;
         room.requestCount = 0;
+        room.requestIds = NULL;
     }
 
     return room;
@@ -1100,41 +1172,15 @@ static ChatRoom cloneChatRoom(ChatRoom *room)
 
     copy.messageCount = room->messageCount;
 
-    if(copy.messageCount > 0)
-    {
-        copy.messageIds = malloc(
-            sizeof(int) * copy.messageCount
-        );
+    copy.messageIds = malloc(
+        sizeof(int) * copy.messageCount
+    );
 
-        memcpy(
-            copy.messageIds,
-            room->messageIds,
-            sizeof(int) * copy.messageCount
-        );
-    }
-    else
-    {
-        copy.messageIds = NULL;
-    }
-
-    copy.requestCount = room->requestCount;
-
-    if(copy.requestCount > 0)
-    {
-        copy.requestIds = malloc(
-            sizeof(int) * copy.requestCount
-        );
-
-        memcpy(
-            copy.requestIds,
-            room->requestIds,
-            sizeof(int) * copy.requestCount
-        );
-    }
-    else
-    {
-        copy.requestIds = NULL;
-    }
+    memcpy(
+        copy.messageIds,
+        room->messageIds,
+        sizeof(int) * copy.messageCount
+    );
 
     return copy;
 }
@@ -1188,78 +1234,7 @@ ChatRoom *getChatRoomsFromUser(int userId,int *count)
 
     return result;
 }
-int removeRequestFromChatRoom(
-    int chatRoomId,
-    int userId
-)
-{
-    int roomCount = 0;
 
-    ChatRoom *rooms =
-        getAllChatRooms(
-            &roomCount
-        );
-
-    if(!rooms)
-    {
-        return 0;
-    }
-
-    for(int i = 0; i < roomCount; i++)
-    {
-        if(rooms[i].id == chatRoomId)
-        {
-            int found = 0;
-
-            for(int j = 0; j < rooms[i].requestCount; j++)
-            {
-                if(rooms[i].requestIds[j] == userId)
-                {
-                    found = 1;
-
-                    /*
-                        Shift left:
-                        remove the userId from requestIds
-                    */
-                    for(
-                        int k = j;
-                        k < rooms[i].requestCount - 1;
-                        k++
-                    )
-                    {
-                        rooms[i].requestIds[k] =
-                            rooms[i].requestIds[k + 1];
-                    }
-
-                    rooms[i].requestCount--;
-
-                    break;
-                }
-            }
-
-            if(found)
-            {
-                saveChatRoom(
-                    &rooms[i]
-                );
-            }
-
-            freeChatRooms(
-                rooms,
-                roomCount
-            );
-
-            return found;
-        }
-    }
-
-    freeChatRooms(
-        rooms,
-        roomCount
-    );
-
-    return 0;
-}
 Message *getMessagesFromChatRoom(int chatRoomId,int *count)
 {
     ChatRoom *room = getChatRoomById(

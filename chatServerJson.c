@@ -125,20 +125,24 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     char buf[BUFSIZE];
     int  len = snprintf(buf, sizeof(buf), "%s\n", json_str);
 
-    // 1. Broadcast a 255.255.255.255 — llega a todos en la LAN
-    //    (incluyendo clientes en el mismo host que Docker)
+    // 1. Broadcast a 255.255.255.255
     {
         struct sockaddr_in bcast;
         memset(&bcast, 0, sizeof(bcast));
         bcast.sin_family      = AF_INET;
         bcast.sin_port        = htons(UDP_PORT);
         bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
-        sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-               (struct sockaddr*)&bcast, sizeof(bcast));
-        LOG("[UDP-BROADCAST] → 255.255.255.255:%d  %s", UDP_PORT, json_str);
+        ssize_t r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
+                           (struct sockaddr*)&bcast, sizeof(bcast));
+        if (r < 0)
+            LOG("[UDP-BROADCAST] ❌ FALLO broadcast 255.255.255.255:%d  errno=%d (%s)",
+                UDP_PORT, errno, strerror(errno));
+        else
+            LOG("[UDP-BROADCAST] ✅ %zd bytes → 255.255.255.255:%d  tipo=%s",
+                r, UDP_PORT, json_str);
     }
 
-    // 2. Unicast a cada cliente registrado (fallback para redes sin broadcast)
+    // 2. Unicast a cada cliente registrado
     pthread_mutex_lock(&g_state->lock);
     ShmUser active[MAX_USERS];
     int count = 0;
@@ -152,16 +156,23 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     }
     pthread_mutex_unlock(&g_state->lock);
 
+    LOG("[UDP] %d cliente(s) para notificar por unicast (skip uid=%d)", count, skip_uid);
+
     for (int i = 0; i < count; i++) {
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
         dest.sin_port   = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
-        sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-               (struct sockaddr*)&dest, sizeof(dest));
-        LOG("[UDP-UNICAST] → uid=%d %s:%d",
-            active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
+        ssize_t r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
+                           (struct sockaddr*)&dest, sizeof(dest));
+        if (r < 0)
+            LOG("[UDP-UNICAST] ❌ FALLO uid=%d %s:%d  errno=%d (%s)",
+                active[i].db_user_id, active[i].udp_ip, active[i].udp_port,
+                errno, strerror(errno));
+        else
+            LOG("[UDP-UNICAST] ✅ %zd bytes → uid=%d %s:%d",
+                r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
 }
 

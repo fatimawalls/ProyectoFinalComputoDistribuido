@@ -94,9 +94,12 @@ class NetworkClient:
         self.on_room_created      = None  # (room_dict)
         self.on_message_deleted   = None  # (room_id, message_id)
         self.on_room_deleted      = None  # (room_id)
-        self.on_join_requested    = None  # (room_id, user_id)
-        self.on_user_online       = None  # (user_id, username)
-        self.on_server_disconnected = None  # ()
+        self.on_join_requested       = None  # (room_id, user_id)
+        self.on_join_request_received = None  # (room_id, user_id, username)
+        self.on_user_online          = None  # (user_id, username)
+        self.on_server_disconnected  = None  # ()
+        self.on_all_users_loaded     = None  # ()
+        self.on_all_rooms_loaded     = None  # ()
         
 
     # ═══════════════════════════════════════════════════════════════
@@ -329,21 +332,25 @@ class NetworkClient:
 
     def _udp_listen_loop(self):
         """Escucha mensajes de Broadcast UDP en segundo plano."""
+        self.udp_socket.settimeout(2.0)  # timeout para no bloquear indefinidamente
         while self.connected and hasattr(self, 'udp_socket') and self.udp_socket:
             try:
-                # Esperamos recibir un datagrama UDP (máx 4096 bytes)
-                data, addr = self.udp_socket.recvfrom(4096)
+                data, addr = self.udp_socket.recvfrom(65536)
                 raw_msg = data.decode(ENCODING).strip()
-                
                 if raw_msg:
-                    print(f"[RED-UDP] 📢 Broadcast recibido de {addr}: {raw_msg}")
-                    # El mensaje ya viene en formato JSON completo ("USER_ONLINE")
-                    # Se lo pasamos al despachador igual que si viniera por TCP
+                    print(f"[RED-UDP] Broadcast recibido de {addr}: {raw_msg}")
                     self._dispatch(raw_msg)
+            except socket.timeout:
+                continue  # timeout normal, seguir esperando
+            except OSError as e:
+                if not self.connected:
+                    break  # desconexión intencional
+                print(f"[RED-UDP] Error de socket UDP: {e}")
+                break
             except Exception as e:
                 if self.connected:
-                    print(f"[RED-UDP] Error de escucha UDP: {e}")
-                break
+                    print(f"[RED-UDP] Error inesperado UDP: {e}")
+                # continuar en lugar de matar el loop por errores de parsing, etc.
 
     def _process_buffer(self):
         """Extrae líneas completas del buffer y las despacha."""

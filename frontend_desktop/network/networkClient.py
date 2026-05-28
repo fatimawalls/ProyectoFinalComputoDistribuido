@@ -231,6 +231,22 @@ class NetworkClient:
             "userId":     self.me.get("id"),
             "chatRoomId": room_id,
         })
+    def _on_delete_request_response(self, obj: dict):
+        if not obj.get("success"):
+            return
+
+        cr = obj.get("chatRoom")
+        if cr:
+            self._upsert_chatroom_from_payload(cr)
+
+        room_id = cr.get("id") if cr else None
+        user_id = obj.get("userId")
+
+        print(f"[RED] DELETE_REQUEST: usuario #{user_id} removido de pendientes en sala #{room_id}")
+
+        # Reuse the join_request callback so the GUI refreshes the coordinator panel
+        if self.on_join_request_received:
+            self.on_join_request_received(room_id, user_id, "")
 
     def remove_user_from_room(self, user_id: int, room_id: int):
         """Elimina un usuario de una sala (acción de coordinador)."""
@@ -369,6 +385,7 @@ class NetworkClient:
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
             "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico
+            "DELETE_REQUEST_RESPONSE":  self._on_delete_request_response,
           
         }
 

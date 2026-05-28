@@ -26,8 +26,9 @@
 		"id":	6,
 		"name":	"prueban+1",
 		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[3]
+		"userIds":	[2, 15],
+		"messageIds":	[3, 44, 45, 46, 47],
+		"requestIds":	[]
 	}, {
 		"id":	7,
 		"name":	"general",
@@ -94,4 +95,39 @@
 		"coordinatorId":	11,
 		"userIds":	[11],
 		"messageIds":	[32]
+	}, {
+		"id":	19,
+		"name":	"lol",
+		"coordinatorId":	15,
+		"userIds":	[15],
+		"messageIds":	[],
+		"requestIds":	[2]
+	}, {
+		"id":	6,
+		"name":	"prueban+1",
+		"coordinatorId":	2,
+		"userIds":	[2],
+		"messageIds":	[3],
+		"requestIds":	[]
+	}, {
+		"id":	6,
+		"name":	"prueban+1",
+		"coordinatorId":	2,
+		"userIds":	[2],
+		"messageIds":	[3],
+		"requestIds":	[]
+	}, {
+		"id":	19,
+		"name":	"lol",
+		"coordinatorId":	15,
+		"userIds":	[15],
+		"messageIds":	[],
+		"requestIds":	[]
+	}, {
+		"id":	19,
+		"name":	"lol",
+		"coordinatorId":	15,
+		"userIds":	[15],
+		"messageIds":	[],
+		"requestIds":	[]
 	}]

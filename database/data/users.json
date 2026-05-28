@@ -68,4 +68,9 @@
 		"name":	"eddy",
 		"password":	"123123",
 		"chatRoomsIds":	[3]
+	}, {
+		"id":	15,
+		"name":	"vale",
+		"password":	"123456",
+		"chatRoomsIds":	[19, 6]
 	}]

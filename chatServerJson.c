@@ -213,13 +213,15 @@ static void on_data_change(const char* resp_json, int sender_uid)
 
     int broadcast = 0;
 
-    if (strcmp(type, "NEW_MESSAGE_RESPONSE") == 0) broadcast = 1;
-    if (strcmp(type, "NEW_CHATROOM_RESPONSE") == 0) broadcast = 1;
-    if (strcmp(type, "ADD_USER_RESPONSE") == 0) broadcast = 1;
-    if (strcmp(type, "REMOVE_USER_RESPONSE") == 0) broadcast = 1;
-    if (strcmp(type, "DELETE_MESSAGE_RESPONSE") == 0) broadcast = 1;
+    if (strcmp(type, "NEW_MESSAGE_RESPONSE") == 0)    broadcast = 1;
+    if (strcmp(type, "NEW_CHATROOM_RESPONSE") == 0)   broadcast = 1;
+    if (strcmp(type, "ADD_USER_RESPONSE") == 0)        broadcast = 1;
+    if (strcmp(type, "REMOVE_USER_RESPONSE") == 0)     broadcast = 1;
+    if (strcmp(type, "DELETE_MESSAGE_RESPONSE") == 0)  broadcast = 1;
     if (strcmp(type, "DELETE_CHATROOM_RESPONSE") == 0) broadcast = 1;
-    if (strcmp(type, "JOIN_REQUEST_RESPONSE") == 0) broadcast = 1;
+    if (strcmp(type, "JOIN_REQUEST_RESPONSE") == 0)    broadcast = 1;
+    if (strcmp(type, "REQUEST_RESPONSE") == 0)         broadcast = 1;  // ← add
+    if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;  // ← add
 
     if (broadcast) {
         /* Extraemos la lista de notifyUsers si viene en el JSON.

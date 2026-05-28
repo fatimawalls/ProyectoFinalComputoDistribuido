@@ -1335,17 +1335,22 @@ class ChatClientGUI:
         self.root.after(0, _update)
 
     def on_join_request_received(self, room_id, requester_id, requester_name):
-        """Callback: llegó una solicitud de ingreso para una sala que coordino."""
         def _update():
             room = self._get_room(room_id)
             room_name = room["name"] if room else str(room_id)
-            self.show_toast(
-                room_id, room_name,
-                "◆ Join Request",
-                f"{requester_name} wants to join #{room_name}",
-            )
+
+            # Only show toast for new requests (requester_name is not empty)
+            if requester_name:
+                self.show_toast(
+                    room_id, room_name,
+                    "◆ Join Request",
+                    f"{requester_name} wants to join #{room_name}",
+                )
+
+            # Refresh chat header (pending count badge) if this room is open
             if self.current_room == room_id:
                 self.show_chat_view(room_id)
+
         self.root.after(0, _update)
 
     # ─────────────────────────────────────────────

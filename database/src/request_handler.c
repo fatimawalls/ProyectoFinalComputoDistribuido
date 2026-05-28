@@ -608,6 +608,73 @@ void handleDeleteChatRoom(
         notifyCount
     );
 }
+void handleDeleteRequest(
+    int clientSocket,
+    cJSON *request
+)
+{
+    cJSON *chatRoomIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "chatRoomId"
+        );
+
+    cJSON *userIdItem =
+        cJSON_GetObjectItem(
+            request,
+            "userId"
+        );
+
+    if(
+        !cJSON_IsNumber(chatRoomIdItem) ||
+        !cJSON_IsNumber(userIdItem)
+    )
+    {
+        sendDeleteRequestResponseJson(
+            clientSocket,
+            0,
+            NULL,
+            0
+        );
+
+        return;
+    }
+
+    int chatRoomId =
+        chatRoomIdItem->valueint;
+
+    int userId =
+        userIdItem->valueint;
+
+    int removed =
+        removeRequestFromChatRoom(
+            chatRoomId,
+            userId
+        );
+
+    ChatRoom *chatRoom = NULL;
+
+    if(removed)
+    {
+        chatRoom =
+            getChatRoomById(
+                chatRoomId
+            );
+    }
+
+    sendDeleteRequestResponseJson(
+        clientSocket,
+        removed,
+        chatRoom,
+        userId
+    );
+
+    if(chatRoom)
+    {
+        freeChatRoom(chatRoom);
+        free(chatRoom);
+    }
+}
 void handleRequest(
     int clientSocket,
     const char *requestText
@@ -712,6 +779,13 @@ void handleRequest(
     else if(strcmp(type, "DELETE_CHATROOM") == 0)
     {
         handleDeleteChatRoom(
+            clientSocket,
+            request
+        );
+    }
+    else if(strcmp(type, "DELETE_REQUEST") == 0)
+    {
+        handleDeleteRequest(
             clientSocket,
             request
         );

@@ -85,4 +85,10 @@ void sendDeleteResponse(
     int *notifyUsers,
     int notifyCount
 );
+void sendDeleteRequestResponseJson(
+    int clientSocket,
+    int success,
+    ChatRoom *chatRoom,
+    int userId
+);
 #endif

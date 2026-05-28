@@ -1188,7 +1188,65 @@ ChatRoom *getChatRoomsFromUser(int userId,int *count)
 
     return result;
 }
+int removeRequestFromChatRoom(
+    int chatRoomId,
+    int userId
+)
+{
+    int roomCount = 0;
 
+    ChatRoom *rooms =
+        getAllChatRooms(
+            &roomCount
+        );
+
+    for(int i = 0; i < roomCount; i++)
+    {
+        if(rooms[i].id == chatRoomId)
+        {
+            int found = 0;
+
+            for(int j = 0; j < rooms[i].requestCount; j++)
+            {
+                if(rooms[i].requestIds[j] == userId)
+                {
+                    found = 1;
+
+                    for(int k = j; k < rooms[i].requestCount - 1; k++)
+                    {
+                        rooms[i].requestIds[k] =
+                            rooms[i].requestIds[k + 1];
+                    }
+
+                    rooms[i].requestCount--;
+                    break;
+                }
+            }
+
+            if(found)
+            {
+                saveAllChatRooms(
+                    rooms,
+                    roomCount
+                );
+            }
+
+            freeChatRooms(
+                rooms,
+                roomCount
+            );
+
+            return found;
+        }
+    }
+
+    freeChatRooms(
+        rooms,
+        roomCount
+    );
+
+    return 0;
+}
 Message *getMessagesFromChatRoom(int chatRoomId,int *count)
 {
     ChatRoom *room = getChatRoomById(

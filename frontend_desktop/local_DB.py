@@ -683,7 +683,15 @@ def applyServerJson(jsonString: str):
             userId=data["userId"],
             chatUser=data.get("chatUser")
         )
+    if objType in ("DELETE_REQUEST_RESPONSE"):
+        chat_room_data = data.get("chatRoom")
 
+        if chat_room_data:
+            return addChatRoomObject(
+                dictToChat(chat_room_data)
+            )
+
+        return None
     if objType in ("ADD_USER_RESPONSE", "ADD_USER_NOTIFICATION"):
         if not data.get("success", 0):
             return None

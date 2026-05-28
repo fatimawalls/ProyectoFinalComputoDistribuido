@@ -604,3 +604,74 @@ void sendDeleteResponse(
 
     cJSON_Delete(json);
 }
+void sendDeleteRequestResponseJson(
+    int clientSocket,
+    int success,
+    ChatRoom *chatRoom,
+    int userId
+)
+{
+    cJSON *json = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(
+        json,
+        "type",
+        "DELETE_REQUEST_RESPONSE"
+    );
+
+    cJSON_AddNumberToObject(
+        json,
+        "success",
+        success
+    );
+
+    cJSON_AddNumberToObject(
+        json,
+        "userId",
+        userId
+    );
+
+    if(chatRoom)
+    {
+        cJSON *roomJson =
+            chatRoomToJson(
+                chatRoom
+            );
+
+        cJSON_AddItemToObject(
+            json,
+            "chatRoom",
+            roomJson
+        );
+
+        cJSON *notifyUsers =
+            cJSON_CreateArray();
+
+        cJSON_AddItemToArray(
+            notifyUsers,
+            cJSON_CreateNumber(
+                chatRoom->coordinatorId
+            )
+        );
+
+        cJSON_AddItemToArray(
+            notifyUsers,
+            cJSON_CreateNumber(
+                userId
+            )
+        );
+
+        cJSON_AddItemToObject(
+            json,
+            "notifyUsers",
+            notifyUsers
+        );
+    }
+
+    sendJson(
+        clientSocket,
+        json
+    );
+
+    cJSON_Delete(json);
+}

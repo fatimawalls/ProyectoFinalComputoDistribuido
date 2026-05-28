@@ -35,6 +35,10 @@ int removeUserFromChatRoom(int userId,int chatRoomId);
 int deleteChatRoomById(
     int chatRoomId
 );
+int removeRequestFromChatRoom(
+    int chatRoomId,
+    int userId
+);
 /* Message */
 
 

@@ -656,7 +656,16 @@ class NetworkClient:
             "messageId": message_id
         }
         self._send(payload)
-
+    def delete_join_request(
+        self,
+        room_id: int,
+        user_id: int
+    ):
+        self._send({
+            "type": "DELETE_REQUEST",
+            "chatRoomId": room_id,
+            "userId": user_id
+        })
     def create_account(self, username, password):
         payload = {
             "type": "CREATE_ACCOUNT",

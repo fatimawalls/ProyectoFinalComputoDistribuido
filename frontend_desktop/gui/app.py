@@ -201,10 +201,9 @@ class ChatClientGUI:
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
-        self._sidebar_canvas = canvas
-        self._scroll_inner   = tk.Frame(canvas, bg=self.BG_DARK)
-        self._scroll_win     = canvas.create_window((0, 0), window=self._scroll_inner,
-                                                     anchor="nw")
+        self._scroll_inner = tk.Frame(canvas, bg=self.BG_DARK)
+        self._scroll_win   = canvas.create_window((0, 0), window=self._scroll_inner,
+                                                   anchor="nw")
 
         def _on_frame_configure(e):
             canvas.configure(scrollregion=canvas.bbox("all"))
@@ -214,30 +213,10 @@ class ChatClientGUI:
         self._scroll_inner.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Mouse wheel — solo scrollea el canvas cuando el cursor está en el sidebar.
-        # bind_all captura el evento globalmente; la guarda _in_sidebar evita que
-        # interfiera con el ScrolledText del chat u otros widgets.
-        def _in_sidebar(widget):
-            w = widget
-            while w is not None:
-                if w is scroll_container:
-                    return True
-                w = getattr(w, "master", None)
-            return False
-
+        # Mouse wheel
         def _on_mousewheel(e):
-            if _in_sidebar(e.widget):
-                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        def _on_scroll_up(e):
-            if _in_sidebar(e.widget):
-                canvas.yview_scroll(-1, "units")
-        def _on_scroll_down(e):
-            if _in_sidebar(e.widget):
-                canvas.yview_scroll(1, "units")
-
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        canvas.bind_all("<Button-4>",   _on_scroll_up)
-        canvas.bind_all("<Button-5>",   _on_scroll_down)
 
         # ── MY CHANNELS ──────────────────────────────────────────
         my_hdr = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
@@ -398,12 +377,6 @@ class ChatClientGUI:
             tk.Label(self.users_frame, text="  No other users online.",
                      font=self.FONT_SMALL, bg=self.BG_DARK,
                      fg=self.TEXT_MUTED, anchor="w").pack(fill="x", padx=8, pady=4)
-
-        # Fuerza que Tkinter calcule el layout antes de actualizar el scrollregion
-        self._scroll_inner.update_idletasks()
-        self._sidebar_canvas.configure(
-            scrollregion=self._sidebar_canvas.bbox("all")
-        )
 
     def _make_room_row(self, parent, room, member: bool):
         """Renders a single room row button in the sidebar."""
@@ -650,12 +623,7 @@ class ChatClientGUI:
         self.clear_main_panel()
         self.current_room = room_id
         room       = self._get_room(room_id)
-
-        if self.network:
-            my_id = self.network.me.get("id")
-            is_pending = my_id in room.get("requestIds", [])
-        else:
-            is_pending = room_id in self.pending_rooms
+        is_pending = room_id in self.pending_rooms
 
         frame = tk.Frame(self.main_panel, bg=self.BG_MAIN)
         frame.place(relx=0.5, rely=0.5, anchor="center")
@@ -696,7 +664,7 @@ class ChatClientGUI:
 
         if is_coord:
             if self.network:
-                requests_count = len(room.get("requestIds", []))
+                requests_count = len(self.network.pending_join_requests.get(room_id, []))
             else:
                 requests_count = len(self.mock.get_join_requests(room_id))
             manage_text    = "⚙ Manage Room" + (f"  [{requests_count}]" if requests_count > 0 else "")
@@ -760,12 +728,6 @@ class ChatClientGUI:
             highlightthickness=0, spacing1=5, spacing3=5)
         self.chat_history.pack(fill="both", expand=True)
         self.chat_history.vbar.configure(width=10)
-        self.chat_history.bind("<Button-4>",
-            lambda e: self.chat_history.yview_scroll(-1, "units"))
-        self.chat_history.bind("<Button-5>",
-            lambda e: self.chat_history.yview_scroll(1, "units"))
-        self.chat_history.bind("<MouseWheel>",
-            lambda e: self.chat_history.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
         self.chat_history.tag_config("system", foreground=self.ACCENT, font=("Consolas", 10, "italic"))
         self.chat_history.tag_config("user",   foreground=self.TEXT_MUTED, font=("Consolas", 11, "bold"))
@@ -829,7 +791,7 @@ class ChatClientGUI:
             user_ids_list = room.get("userIds", [])
             for u_id in user_ids_list:
                 # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
-                user_info = self.users.get(u_id, {}) if hasattr(self, 'users') else {}
+                user_info = self.network.users.get(u_id, {})
                 user_name = user_info.get("name", "Desconocido")
                 lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
         else:
@@ -873,16 +835,20 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def leave_room(self, room_id):
-        room = self.mock.get_room(room_id)
+        room = self._get_room(room_id)
+        if not room:
+            return
         if self.confirm_dialog("LEAVE ROOM", f"Are you sure you want to leave '{room['name']}'?"):
-            # AQUÍ IRÍA: self.network.send("LOBBY_LEAVE_ROOM", room_id)
-            self.mock.kick_user(room_id, self.username)
-            self.mock.messages.setdefault(room_id, []).append(
-                ("__SYSTEM__", f"{self.nickname} has left the room.")
-            )
-            self.current_room = None
-            self.refresh_sidebar()
-            self.show_welcome_view()
+            if self.network:
+                self.network.leave_room(room_id)
+            else:
+                self.mock.kick_user(room_id, self.username)
+                self.mock.messages.setdefault(room_id, []).append(
+                    ("__SYSTEM__", f"{self.nickname} has left the room.")
+                )
+                self.current_room = None
+                self.refresh_sidebar()
+                self.show_welcome_view()
 
     # ─────────────────────────────────────────────
     #  COORDINATOR PANEL
@@ -996,7 +962,7 @@ class ChatClientGUI:
             requests_list = [
                 {
                     "userId": uid,
-                    "name": self.network.users.get(uid, {}).get("name", f"User_{uid}")
+                    "nickname": self.network.users.get(uid, {}).get("name", f"User_{uid}")
                 }
                 for uid in room.get("requestIds", [])
             ]
@@ -1026,7 +992,9 @@ class ChatClientGUI:
                     self.open_coordinator_panel(room_id)
 
                 def reject_action(uid=r_id):
-                    if not self.network:
+                    if self.network:
+                        self.network.delete_join_request(room_id, int(uid))
+                    else:
                         self.mock.reject_request(room_id, uid)
                     panel.destroy()
                     self.open_coordinator_panel(room_id)
@@ -1347,14 +1315,37 @@ class ChatClientGUI:
             self.network.request_join_room(room_id)
             self.pending_rooms.add(room_id)
             self.show_private_room_view(room_id)
-            return
-
-        success = self.mock.request_join(room_id)
-        if success:
-            self.pending_rooms.add(room_id)
-            self.show_private_room_view(room_id)
         else:
-            self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
+            success = self.mock.request_join(room_id)
+            if success:
+                self.pending_rooms.add(room_id)
+                self.show_private_room_view(room_id)
+            else:
+                self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
+
+    def on_join_request_sent(self, room_id, success):
+        """Callback: el servidor confirmó (o rechazó) el envío de la solicitud."""
+        def _update():
+            if not success:
+                self.pending_rooms.discard(room_id)
+                self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
+                if self.current_room == room_id:
+                    self.show_private_room_view(room_id)
+        self.root.after(0, _update)
+
+    def on_join_request_received(self, room_id, requester_id, requester_name):
+        """Callback: llegó una solicitud de ingreso para una sala que coordino."""
+        def _update():
+            room = self._get_room(room_id)
+            room_name = room["name"] if room else str(room_id)
+            self.show_toast(
+                room_id, room_name,
+                "◆ Join Request",
+                f"{requester_name} wants to join #{room_name}",
+            )
+            if self.current_room == room_id:
+                self.show_chat_view(room_id)
+        self.root.after(0, _update)
 
     # ─────────────────────────────────────────────
     #  CHANNEL SELECT

@@ -7,7 +7,7 @@
 		"id":	2,
 		"name":	"soto",
 		"password":	"soto",
-		"chatRoomsIds":	[2, 3, 4, 5, 6, 16, 17]
+		"chatRoomsIds":	[3, 4, 5, 6, 16, 17]
 	}, {
 		"id":	3,
 		"name":	"juan",
@@ -52,7 +52,7 @@
 		"id":	11,
 		"name":	"papu",
 		"password":	"papu2",
-		"chatRoomsIds":	[]
+		"chatRoomsIds":	[18, 17]
 	}, {
 		"id":	12,
 		"name":	"papu",
@@ -63,4 +63,9 @@
 		"name":	"PruebanuevoUsuario",
 		"password":	"pruebaprueba",
 		"chatRoomsIds":	[]
+	}, {
+		"id":	14,
+		"name":	"eddy",
+		"password":	"123123",
+		"chatRoomsIds":	[3]
 	}]

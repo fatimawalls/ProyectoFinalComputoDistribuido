@@ -122,7 +122,23 @@ static void udp_send_to(const char* ip, int port, const char* json_str)
    ============================================================ */
 static void udp_broadcast_all(const char* json_str, int skip_uid)
 {
-    // 1. Copiar usuarios activos bajo protección
+    char buf[BUFSIZE];
+    int  len = snprintf(buf, sizeof(buf), "%s\n", json_str);
+
+    // 1. Broadcast a 255.255.255.255 — llega a todos en la LAN
+    //    (incluyendo clientes en el mismo host que Docker)
+    {
+        struct sockaddr_in bcast;
+        memset(&bcast, 0, sizeof(bcast));
+        bcast.sin_family      = AF_INET;
+        bcast.sin_port        = htons(UDP_PORT);
+        bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
+        sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
+               (struct sockaddr*)&bcast, sizeof(bcast));
+        LOG("[UDP-BROADCAST] → 255.255.255.255:%d  %s", UDP_PORT, json_str);
+    }
+
+    // 2. Unicast a cada cliente registrado (fallback para redes sin broadcast)
     pthread_mutex_lock(&g_state->lock);
     ShmUser active[MAX_USERS];
     int count = 0;
@@ -136,21 +152,16 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     }
     pthread_mutex_unlock(&g_state->lock);
 
-    // 2. Enviar sin retener el mutex
     for (int i = 0; i < count; i++) {
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
-        dest.sin_port = htons(active[i].udp_port);
+        dest.sin_port   = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
-
-        char buf[BUFSIZE];
-        int  len = snprintf(buf, sizeof(buf), "%s\n", json_str);
         sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-            (struct sockaddr*)&dest, sizeof(dest));
-
-        LOG("[UDP-BROADCAST] → uid=%d %s:%d  %s",
-            active[i].db_user_id, active[i].udp_ip, active[i].udp_port, json_str);
+               (struct sockaddr*)&dest, sizeof(dest));
+        LOG("[UDP-UNICAST] → uid=%d %s:%d",
+            active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
 }
 
@@ -572,16 +583,20 @@ int main(int argc, char* argv[])
     pthread_mutex_init(&g_state->lock, &mattr);
     pthread_mutexattr_destroy(&mattr);
 
-    /* Socket UDP — solo para envío, no necesita puerto fijo */
+    /* Socket UDP — envío de notificaciones a clientes */
     g_udp_sd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_sd < 0) { perror("udp socket"); exit(1); }
 
-    /* Bind a puerto 0 → el SO asigna uno efímero, sin conflictos */
+    /* SO_BROADCAST: necesario para poder enviar a 255.255.255.255 */
+    int bcast = 1;
+    setsockopt(g_udp_sd, SOL_SOCKET, SO_BROADCAST, &bcast, sizeof(bcast));
+
+    /* Bind a puerto 0 → el SO asigna uno efímero */
     struct sockaddr_in ua;
     memset(&ua, 0, sizeof(ua));
     ua.sin_family = AF_INET;
     ua.sin_addr.s_addr = INADDR_ANY;
-    ua.sin_port = 0;   // ← CAMBIO 2: antes era htons(UDP_PORT)
+    ua.sin_port = 0;
     if (bind(g_udp_sd, (struct sockaddr*)&ua, sizeof(ua)) < 0) {
         perror("udp bind"); exit(1);
     }

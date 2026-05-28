@@ -107,10 +107,9 @@ _udp_seen: dict[str, float] = {}   # dedup: hash → timestamp
 
 
 def _is_duplicate_udp(raw: str) -> bool:
-    """Devuelve True si este mensaje ya se procesó hace menos de 2 s."""
+    """Devuelve True si este mensaje ya se procesó hace menos de 5 s."""
     h = hashlib.md5(raw.encode()).hexdigest()
     now = time.time()
-    # Limpiar entradas viejas
     for k in list(_udp_seen.keys()):
         if now - _udp_seen[k] > 5.0:
             del _udp_seen[k]

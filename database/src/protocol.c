@@ -634,7 +634,7 @@ void sendDeleteRequestResponseJson(
     if(chatRoom)
     {
         cJSON *roomJson =
-            chatRoomToJson(
+            chatRoomPayload(
                 chatRoom
             );
 

@@ -1200,6 +1200,11 @@ int removeRequestFromChatRoom(
             &roomCount
         );
 
+    if(!rooms)
+    {
+        return 0;
+    }
+
     for(int i = 0; i < roomCount; i++)
     {
         if(rooms[i].id == chatRoomId)
@@ -1212,22 +1217,30 @@ int removeRequestFromChatRoom(
                 {
                     found = 1;
 
-                    for(int k = j; k < rooms[i].requestCount - 1; k++)
+                    /*
+                        Shift left:
+                        remove the userId from requestIds
+                    */
+                    for(
+                        int k = j;
+                        k < rooms[i].requestCount - 1;
+                        k++
+                    )
                     {
                         rooms[i].requestIds[k] =
                             rooms[i].requestIds[k + 1];
                     }
 
                     rooms[i].requestCount--;
+
                     break;
                 }
             }
 
             if(found)
             {
-                saveAllChatRooms(
-                    rooms,
-                    roomCount
+                saveChatRoom(
+                    &rooms[i]
                 );
             }
 

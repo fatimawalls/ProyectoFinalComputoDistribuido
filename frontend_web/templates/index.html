@@ -67,19 +67,20 @@
                 <div class="divider"></div>
             </div>
 
-            <!-- Channels -->
-            <div class="sidebar-section">
-                <div class="section-row">
-                    <span class="section-title">CHANNELS</span>
-                    <span class="accent-link" onclick="openModal('modal-create-room')" style="font-size:18px; line-height:1;">＋</span>
+            <!-- Zona scrollable: channels + users -->
+            <div class="sidebar-scroll">
+                <div class="sidebar-section">
+                    <div class="section-row">
+                        <span class="section-title">CHANNELS</span>
+                        <span class="accent-link" onclick="openModal('modal-create-room')" style="font-size:18px; line-height:1;">＋</span>
+                    </div>
+                    <ul id="channel-list"></ul>
                 </div>
-                <ul id="channel-list"></ul>
-            </div>
 
-            <!-- Users (todos — online y offline) -->
-            <div class="sidebar-section">
-                <div class="section-title" style="margin-bottom:10px;">USERS</div>
-                <ul id="users-list"></ul>
+                <div class="sidebar-section">
+                    <div class="section-title" style="margin-bottom:10px;">USERS</div>
+                    <ul id="users-list"></ul>
+                </div>
             </div>
 
             <!-- Profile -->

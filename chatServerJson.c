@@ -224,23 +224,31 @@ static void on_data_change(const char* resp_json, int sender_uid)
     if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;  // ← add
 
     if (broadcast) {
-        /* Extraemos la lista de notifyUsers si viene en el JSON.
-           Si viene, solo notificamos a esos usuarios.
-           Si no viene, hacemos broadcast a todos. */
-
-        cJSON* notify_arr = cJSON_GetObjectItem(obj, "notifyUsers");
-
-        if (cJSON_IsArray(notify_arr) && cJSON_GetArraySize(notify_arr) > 0) {
-            cJSON* item = NULL;
-            cJSON_ArrayForEach(item, notify_arr) {
-                int uid = item->valueint;
-                if (uid == sender_uid) continue; /* ya recibió por TCP */
-                udp_notify_user(uid, resp_json);
-            }
+        /* NEW_CHATROOM_RESPONSE: el DB pone notifyUsers=[coordinatorId].
+           Como el coordinador es el sender, se saltaría y nadie recibiría
+           la notificación. Una sala nueva es relevante para todos. */
+        if (strcmp(type, "NEW_CHATROOM_RESPONSE") == 0) {
+            udp_broadcast_all(resp_json, sender_uid);
         }
         else {
-            /* Sin lista explícita → todos los conectados */
-            udp_broadcast_all(resp_json, sender_uid);
+            cJSON* notify_arr = cJSON_GetObjectItem(obj, "notifyUsers");
+            if (cJSON_IsArray(notify_arr) && cJSON_GetArraySize(notify_arr) > 0) {
+                int notified = 0;
+                cJSON* item = NULL;
+                cJSON_ArrayForEach(item, notify_arr) {
+                    int uid = item->valueint;
+                    if (uid == sender_uid) continue; /* ya recibió por TCP */
+                    udp_notify_user(uid, resp_json);
+                    notified++;
+                }
+                /* Si notifyUsers solo contenía al sender, igual avisamos a todos
+                   para no perder la notificación. */
+                if (!notified) udp_broadcast_all(resp_json, sender_uid);
+            }
+            else {
+                /* Sin lista explícita → todos los conectados */
+                udp_broadcast_all(resp_json, sender_uid);
+            }
         }
     }
 

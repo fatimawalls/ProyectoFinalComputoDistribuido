@@ -448,7 +448,8 @@ class ProtocolDispatcher:
             room_id = cr.get("id")
             my_id   = self._user_ids.get(sid)
 
-            # Actualiza estado local
+            already_known = room_id in self._rooms.get(sid, {})
+
             if room_id is not None:
                 self._rooms.setdefault(sid, {})[room_id] = {
                     "id":            room_id,
@@ -459,8 +460,10 @@ class ProtocolDispatcher:
                 self._messages.setdefault(sid, {})[room_id] = []
 
             print(f"[dispatcher] room_created #{room_id}: {cr.get('name')}")
-            self.sio.emit("room_created",
-                          {"room_id": room_id, "name": cr.get("name")}, to=sid)
+            # Dedup: el creador ya recibió esta sala por TCP
+            if not already_known:
+                self.sio.emit("room_created",
+                              {"room_id": room_id, "name": cr.get("name")}, to=sid)
         else:
             print(f"[dispatcher] room_created FAIL  payload={p}")
             self.sio.emit("room_error", {"message": "No se pudo crear la sala"}, to=sid)
@@ -476,9 +479,13 @@ class ProtocolDispatcher:
         text    = msg.get("text", "")
         ts      = msg.get("id", 0)
 
+        # Dedup: el remitente ya recibió el mensaje por TCP
+        if any(m.get("ts") == ts
+               for m in self._messages.get(sid, {}).get(room_id, [])):
+            return
+
         sender = self._username(sid, user_id)
 
-        # Persiste en memoria
         self._messages.setdefault(sid, {}).setdefault(room_id, []).append({
             "user_id": user_id,
             "text":    text,

@@ -152,6 +152,26 @@ socket.on('lobby_update', data => {
     updateUsersList();
 });
 
+socket.on('user_online', data => {
+    const existing = allUsersMap[data.username];
+    if (existing) {
+        existing.online = true;
+    } else {
+        const u = { username: data.username, nickname: data.nickname || data.username, online: true };
+        allUsersMap[data.username] = u;
+        if (lobbyData.all_users) lobbyData.all_users.push(u);
+    }
+    updateUsersList();
+});
+
+socket.on('user_offline', data => {
+    const existing = allUsersMap[data.username];
+    if (existing) {
+        existing.online = false;
+        updateUsersList();
+    }
+});
+
 function updateChannelList() {
     const cl = document.getElementById('channel-list');
     cl.innerHTML = '';

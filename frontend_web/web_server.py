@@ -32,6 +32,8 @@ WEB_HOST      = sys.argv[4]      if len(sys.argv) > 4 else "0.0.0.0"
 
 # Mapa sid → socket TCP al servidor C
 client_sockets: dict[str, socket.socket] = {}
+# Mapa sid → IP local usada para conectar al servidor C
+client_local_ips: dict[str, str] = {}
 
 # Dispatcher global: parsea tramas y emite eventos SocketIO
 dispatcher = ProtocolDispatcher(socketio)
@@ -46,6 +48,7 @@ def connect_to_c_server(sid: str) -> bool:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((C_SERVER_IP, C_SERVER_PORT))
         client_sockets[sid] = sock
+        client_local_ips[sid] = sock.getsockname()[0]
         socketio.start_background_task(listen_to_c_server, sid, sock)
         return True
     except Exception as e:
@@ -185,6 +188,7 @@ def handle_connect():
 def handle_disconnect():
     sid = request.sid
     sock = client_sockets.pop(sid, None)
+    client_local_ips.pop(sid, None)
     if sock:
         try:
             send_to_c(sid, Protocol.build_logout())
@@ -202,8 +206,9 @@ def handle_login(data):
     sid      = request.sid
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-    print(f"[web_server] login sid={sid} user={username!r}")
-    send_to_c(sid, Protocol.build_login(username, password))
+    udp_ip   = client_local_ips.get(sid, "")
+    print(f"[web_server] login sid={sid} user={username!r} udp={udp_ip}:{UDP_LISTEN_PORT}")
+    send_to_c(sid, Protocol.build_login(username, password, UDP_LISTEN_PORT, udp_ip))
 
 
 @socketio.on("register")
@@ -211,8 +216,9 @@ def handle_register(data):
     sid      = request.sid
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-    print(f"[web_server] register sid={sid} user={username!r}")
-    send_to_c(sid, Protocol.build_register(username, password))
+    udp_ip   = client_local_ips.get(sid, "")
+    print(f"[web_server] register sid={sid} user={username!r} udp={udp_ip}:{UDP_LISTEN_PORT}")
+    send_to_c(sid, Protocol.build_register(username, password, UDP_LISTEN_PORT, udp_ip))
 
 
 # ── Navegación de sala ────────────────────────────────────────────────────

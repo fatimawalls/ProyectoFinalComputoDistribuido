@@ -66,14 +66,20 @@ class Protocol:
         return raw.encode("utf-8")
 
     @staticmethod
-    def build_login(username: str, password: str) -> bytes:
-        return Protocol._flat({"type": "AUTH",
-                               "username": username, "password": password})
+    def build_login(username: str, password: str,
+                    udp_port: int = 0, udp_ip: str = "") -> bytes:
+        obj = {"type": "AUTH", "username": username, "password": password}
+        if udp_port: obj["udpPort"] = udp_port
+        if udp_ip:   obj["udpIp"]   = udp_ip
+        return Protocol._flat(obj)
 
     @staticmethod
-    def build_register(username: str, password: str) -> bytes:
-        return Protocol._flat({"type": "CREATE_ACCOUNT",
-                               "username": username, "password": password})
+    def build_register(username: str, password: str,
+                       udp_port: int = 0, udp_ip: str = "") -> bytes:
+        obj = {"type": "CREATE_ACCOUNT", "username": username, "password": password}
+        if udp_port: obj["udpPort"] = udp_port
+        if udp_ip:   obj["udpIp"]   = udp_ip
+        return Protocol._flat(obj)
 
     @staticmethod
     def build_logout() -> bytes:
@@ -571,10 +577,17 @@ class ProtocolDispatcher:
 
         print(f"[dispatcher] USER_ONLINE: {username} (#{user_id})")
         self.sio.emit("user_online",
-                      {"username": username, "nickname": username}, to=sid)
+                      {"username": username, "nickname": username,
+                       "userId": user_id}, to=sid)
 
     def _on_user_offline(self, sid, status, p):
         username = p.get("username") or p.get("name", "")
-        print(f"[dispatcher] USER_OFFLINE: {username}")
+        user_id  = p.get("userId") or p.get("id")
+
+        if user_id and sid in self._users:
+            self._users[sid].pop(user_id, None)
+
+        print(f"[dispatcher] USER_OFFLINE: {username} (#{user_id})")
         self.sio.emit("user_offline",
-                      {"username": username, "nickname": username}, to=sid)
+                      {"username": username, "nickname": username,
+                       "userId": user_id}, to=sid)

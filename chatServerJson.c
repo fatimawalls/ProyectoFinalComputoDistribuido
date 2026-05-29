@@ -258,30 +258,17 @@ static void on_data_change(const char* resp_json, int sender_uid)
 }
 
 /* ============================================================
-   broadcast_user_online — igual que antes, para USER_ONLINE
+   broadcast_user_online — notifica a todos los clientes registrados
+   que un usuario se conectó, usando el mismo unicast que on_data_change.
    ============================================================ */
 static void broadcast_user_online(int user_id, const char* username)
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) { perror("broadcast socket"); return; }
-
-    int on = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(UDP_PORT);
-    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n",
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
         user_id, username);
-    sendto(sock, buf, strlen(buf), 0,
-        (struct sockaddr*)&addr, sizeof(addr));
-    LOG("[UDP BROADCAST USER_ONLINE] uid=%d username=%s", user_id, username);
-    close(sock);
+    LOG("[UDP USER_ONLINE] uid=%d username=%s", user_id, username);
+    udp_broadcast_all(buf, user_id);
 }
 
 /* ============================================================
@@ -521,6 +508,16 @@ static void atender_cliente(int sock, const char* client_ip)
             }
             line = strtok(NULL, "\n");
         }
+    }
+
+    /* Notificar a todos antes de eliminar al usuario del registro */
+    if (uid > 0) {
+        char offline_buf[256];
+        snprintf(offline_buf, sizeof(offline_buf),
+            "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\"}",
+            uid, username);
+        LOG("[UDP USER_OFFLINE] uid=%d username=%s", uid, username);
+        udp_broadcast_all(offline_buf, uid);
     }
 
     shm_unregister_user(uid);

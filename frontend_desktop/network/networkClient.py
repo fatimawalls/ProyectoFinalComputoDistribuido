@@ -57,6 +57,7 @@ on_room_created(room_dict)               * sala nueva creada
 on_message_deleted(room_id, message_id) * mensaje eliminado
 on_room_deleted(room_id)                 * sala eliminada
 on_user_online(user_id, username)        * usuario nuevo conectado/registrado
+on_user_offline(user_id, username)       * usuario desconectado
 on_server_disconnected()
 """
 
@@ -95,6 +96,7 @@ class NetworkClient:
         self.on_message_deleted   = None  # (room_id, message_id)
         self.on_room_deleted      = None  # (room_id)
         self.on_user_online       = None  # (user_id, username)
+        self.on_user_offline      = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
         self.on_all_users_loaded  = None  # ()
         self.on_all_rooms_loaded  = None  # ()
@@ -324,22 +326,24 @@ class NetworkClient:
             self.on_server_disconnected()
 
     def _udp_listen_loop(self):
-        """Escucha mensajes de Broadcast UDP en segundo plano."""
+        """Escucha mensajes UDP en segundo plano."""
+        local_addr = self.udp_socket.getsockname()
+        print(f"[UDP-HILO] Arrancando listener en {local_addr[0]}:{local_addr[1]}")
         while self.connected and hasattr(self, 'udp_socket') and self.udp_socket:
             try:
-                # Esperamos recibir un datagrama UDP (máx 4096 bytes)
                 data, addr = self.udp_socket.recvfrom(4096)
+                print(f"[UDP-HILO] RAW {len(data)} bytes de {addr[0]}:{addr[1]}")
                 raw_msg = data.decode(ENCODING).strip()
-
                 if raw_msg:
-                    print(f"[RED-UDP] 📢 Broadcast recibido de {addr}: {raw_msg}")
-                    # El mensaje ya viene en formato JSON completo ("USER_ONLINE")
-                    # Se lo pasamos al despachador igual que si viniera por TCP
+                    print(f"[UDP-HILO] MSG → {raw_msg}")
                     self._dispatch(raw_msg)
+                else:
+                    print("[UDP-HILO] Paquete vacío ignorado")
             except Exception as e:
                 if self.connected:
-                    print(f"[RED-UDP] Error de escucha UDP: {e}")
+                    print(f"[UDP-HILO] ERROR: {e}")
                 break
+        print("[UDP-HILO] Loop terminado")
 
     def _process_buffer(self):
         """Extrae líneas completas del buffer y las despacha."""
@@ -382,6 +386,7 @@ class NetworkClient:
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
             "USER_ONLINE":              self._on_user_online,
+            "USER_OFFLINE":             self._on_user_offline,
         }
 
         handler = handlers.get(msg_type)
@@ -489,20 +494,25 @@ class NetworkClient:
     # ═══════════════════════════════════════════════════════════════
 
     def _on_user_online(self, obj: dict):
-        """
-        Llega como un evento push dinámico cuando un usuario inicia sesión
-        o se registra de forma global en la plataforma.
-        """
         user_id  = obj.get("userId")
         username = obj.get("username")
 
         if user_id and username:
             if user_id not in self.users:
                 self.users[user_id] = {"id": user_id, "name": username}
-                print(f"[RED] Nuevo usuario conectado/registrado en el server: {username} (#{user_id})")
-
+            print(f"[RED] USER_ONLINE: {username} (#{user_id})")
             if self.on_user_online:
                 self.on_user_online(user_id, username)
+
+    def _on_user_offline(self, obj: dict):
+        user_id  = obj.get("userId")
+        username = obj.get("username")
+
+        if user_id and username:
+            self.users.pop(user_id, None)
+            print(f"[RED] USER_OFFLINE: {username} (#{user_id})")
+            if self.on_user_offline:
+                self.on_user_offline(user_id, username)
 
     def _on_new_message_response(self, obj: dict):
         if not obj.get("success"):

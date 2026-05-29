@@ -85,16 +85,26 @@ static void* hilo_udp_listener(void* arg)
     struct sockaddr_in src;
     socklen_t slen = sizeof(src);
 
+    printf("[UDP-HILO] Arrancando listener en puerto %d\n", g_udp_port);
+    fflush(stdout);
+
     while (1) {
         int n = recvfrom(g_udp_fd, buf, sizeof(buf) - 1, 0,
             (struct sockaddr*)&src, &slen);
-        if (n <= 0) break;
+        if (n <= 0) {
+            printf("[UDP-HILO] recvfrom retornó %d, terminando\n", n);
+            fflush(stdout);
+            break;
+        }
         buf[n] = '\0';
+        printf("\n[UDP-HILO] RAW %d bytes de %s:%d → %s\n",
+               n, inet_ntoa(src.sin_addr), ntohs(src.sin_port), buf);
+        fflush(stdout);
         buf[strcspn(buf, "\n")] = '\0';
 
         cJSON* notif = cJSON_Parse(buf);
         if (!notif) {
-            printf("\n[UDP] %s\n> ", buf);
+            printf("[UDP-HILO] JSON inválido: %s\n> ", buf);
             fflush(stdout);
             continue;
         }

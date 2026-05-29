@@ -331,14 +331,15 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
 /* ============================================================
    SHARED MEMORY — registrar / eliminar usuario
    ============================================================ */
-static void shm_register_user(int uid, const char* uname, const char* ip)
+static void shm_register_user(int uid, const char* uname, const char* ip, int udp_port)
 {
+    if (udp_port <= 0) udp_port = UDP_PORT;
     pthread_mutex_lock(&g_state->lock);
     /* Si el usuario ya existe (reconexión) */
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
             strncpy(g_state->users[i].udp_ip, ip, sizeof(g_state->users[i].udp_ip) - 1);
-            g_state->users[i].udp_port = UDP_PORT;   // ← CAMBIO 1: actualizar puerto en reconexión
+            g_state->users[i].udp_port = udp_port;
             pthread_mutex_unlock(&g_state->lock);
             return;
         }
@@ -350,11 +351,12 @@ static void shm_register_user(int uid, const char* uname, const char* ip)
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
             su->active = 1;
-            su->udp_port = UDP_PORT;               // ← CAMBIO 1: antes era 0
+            su->udp_port = udp_port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
             strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
             g_state->user_count++;
-            LOG("[SHM] Registrado uid=%d username=%s ip=%s slot=%d", uid, uname, ip, i);
+            LOG("[SHM] Registrado uid=%d username=%s ip=%s udp_port=%d slot=%d",
+                uid, uname, ip, udp_port, i);
             break;
         }
     }
@@ -428,8 +430,13 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                shm_register_user(uid, username, client_ip);
-                LOG("[HIJO-CREATE-OK] uid=%d user=%s", uid, username);
+                cJSON* judp  = cJSON_GetObjectItem(req, "udpPort");
+                cJSON* jip   = cJSON_GetObjectItem(req, "udpIp");
+                int  udp_port = (judp && cJSON_IsNumber(judp)) ? judp->valueint : 0;
+                const char* udp_ip = (jip && cJSON_IsString(jip) && jip->valuestring[0])
+                                     ? jip->valuestring : client_ip;
+                shm_register_user(uid, username, udp_ip, udp_port);
+                LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d", uid, username, udp_ip, udp_port);
                 broadcast_user_online(uid, username);
                 cJSON_Delete(req);
                 break;
@@ -467,8 +474,13 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                shm_register_user(uid, username, client_ip);
-                LOG("[HIJO-AUTH-OK] uid=%d user=%s", uid, username);
+                cJSON* judp  = cJSON_GetObjectItem(req, "udpPort");
+                cJSON* jip   = cJSON_GetObjectItem(req, "udpIp");
+                int  udp_port = (judp && cJSON_IsNumber(judp)) ? judp->valueint : 0;
+                const char* udp_ip = (jip && cJSON_IsString(jip) && jip->valuestring[0])
+                                     ? jip->valuestring : client_ip;
+                shm_register_user(uid, username, udp_ip, udp_port);
+                LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d", uid, username, udp_ip, udp_port);
                 broadcast_user_online(uid, username);
             }
             else {

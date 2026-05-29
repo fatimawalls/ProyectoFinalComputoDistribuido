@@ -111,21 +111,19 @@ class NetworkClient:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((ip, port))
             self.connected = True
-            print("[RED] ¡Conexión TCP establecida!")
+            self._local_ip = self.socket.getsockname()[0]
+            print(f"[RED] ¡Conexión TCP establecida! (IP local: {self._local_ip})")
             threading.Thread(target=self._listen_loop, daemon=True).start()
 
-            # --- NUEVO: HILO PARA ESCUCHAR BROADCASTS UDP ---
+            # --- HILO PARA ESCUCHAR NOTIFICACIONES UDP ---
+            self._udp_port = 0
             try:
                 self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                # IMPORTANTE: Permite que varios clientes en la misma PC escuchen el 5001
-                self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, 'SO_REUSEPORT'):
-                    self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-
-                # Escuchamos en el puerto 5001 (en todas las interfaces "")
-                self.udp_socket.bind(("", 5001))
+                # Puerto 0 → el SO asigna un puerto efímero único para este cliente
+                self.udp_socket.bind(("", 0))
+                self._udp_port = self.udp_socket.getsockname()[1]
                 threading.Thread(target=self._udp_listen_loop, daemon=True).start()
-                print("[RED] ¡Escuchando Broadcasts UDP en el puerto 5001!")
+                print(f"[RED] ¡Escuchando UDP en puerto efímero {self._udp_port}!")
             except Exception as udp_e:
                 print(f"[RED] Advertencia UDP: No se pudo iniciar la escucha: {udp_e}")
             # ------------------------------------------------
@@ -190,6 +188,8 @@ class NetworkClient:
             "type":     "AUTH",
             "username": username,
             "password": password,
+            "udpPort":  self._udp_port,
+            "udpIp":    getattr(self, "_local_ip", ""),
         })
 
     def register(self, username: str, password: str, nickname: str | None = None):
@@ -199,6 +199,8 @@ class NetworkClient:
             "username": username,
             "password": password,
             "nickname": nickname or username,
+            "udpPort":  self._udp_port,
+            "udpIp":    getattr(self, "_local_ip", ""),
         })
 
     def send_message(self, room_id: int, text: str):

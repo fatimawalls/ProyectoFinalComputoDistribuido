@@ -23,13 +23,15 @@
 #include "cJSON.h"
 
  /* ─── Constantes ─────────────────────────────────────────────── */
-#define TCP_PORT   5000
-#define UDP_LOCAL  5100      /* puerto LOCAL donde escuchamos notificaciones */
+#define TCP_PORT   5006
+#define UDP_LOCAL  0         /* 0 = efímero: el SO asigna un puerto único */
 #define BUFSIZE    8192
 
 /* ─── Estado global ─────────────────────────────────────────── */
 static int  g_tcp_fd = -1;
 static int  g_udp_fd = -1;
+static int  g_udp_port = 0;
+static char g_udp_ip[INET_ADDRSTRLEN] = "";
 static int  g_user_id = -1;
 static char g_username[64] = "";
 
@@ -206,6 +208,8 @@ static int hacer_auth(void)
             cJSON_AddStringToObject(req, "type", "CREATE_ACCOUNT");
             cJSON_AddStringToObject(req, "username", user);
             cJSON_AddStringToObject(req, "password", pass);
+            cJSON_AddNumberToObject(req, "udpPort", g_udp_port);
+            cJSON_AddStringToObject(req, "udpIp", g_udp_ip);
             send_json_obj(g_tcp_fd, req);
             cJSON_Delete(req);
 
@@ -247,6 +251,8 @@ static int hacer_auth(void)
         cJSON_AddStringToObject(req, "type", "AUTH");
         cJSON_AddStringToObject(req, "username", user);
         cJSON_AddStringToObject(req, "password", pass);
+        cJSON_AddNumberToObject(req, "udpPort", g_udp_port);
+        cJSON_AddStringToObject(req, "udpIp", g_udp_ip);
         send_json_obj(g_tcp_fd, req);
         cJSON_Delete(req);
 
@@ -538,10 +544,13 @@ int main(int argc, char* argv[])
     udp_local.sin_addr.s_addr = INADDR_ANY;
     udp_local.sin_port = htons(UDP_LOCAL);
     if (bind(g_udp_fd, (struct sockaddr*)&udp_local, sizeof(udp_local)) == -1) {
-        perror("udp bind");
-        fprintf(stderr, "Puerto %d en uso — cambia UDP_LOCAL en el fuente\n", UDP_LOCAL);
-        exit(1);
+        perror("udp bind"); exit(1);
     }
+    /* Obtener el puerto efímero asignado por el SO */
+    socklen_t slen = sizeof(udp_local);
+    getsockname(g_udp_fd, (struct sockaddr*)&udp_local, &slen);
+    g_udp_port = ntohs(udp_local.sin_port);
+    printf("Notificaciones UDP en puerto local %d\n\n", g_udp_port);
     pthread_t tid;
     pthread_create(&tid, NULL, hilo_udp_listener, NULL);
     pthread_detach(tid);
@@ -562,8 +571,14 @@ int main(int argc, char* argv[])
     if (connect(g_tcp_fd, (struct sockaddr*)&srv, sizeof(srv)) == -1) {
         perror("connect"); exit(1);
     }
-    printf("Conectado a %s:%d\n", host, TCP_PORT);
-    printf("Notificaciones UDP en puerto local %d\n\n", UDP_LOCAL);
+    /* Obtener la IP local que el SO usó para esta conexión */
+    {
+        struct sockaddr_in local;
+        socklen_t llen = sizeof(local);
+        getsockname(g_tcp_fd, (struct sockaddr*)&local, &llen);
+        inet_ntop(AF_INET, &local.sin_addr, g_udp_ip, sizeof(g_udp_ip));
+    }
+    printf("Conectado a %s:%d  (IP local: %s)\n", host, TCP_PORT, g_udp_ip);
 
     /*
      * El servidor NO envía nada al conectar.

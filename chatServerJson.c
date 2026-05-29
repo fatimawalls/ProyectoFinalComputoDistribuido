@@ -4,15 +4,12 @@
  * Arquitectura:
  * Cliente <──TCP:5006──> chatServerJson <──TCP:8080──> database_server
  *
- * CAMBIOS onDataChange:
- *   - on_data_change(): detecta el tipo de respuesta y hace broadcast UDP
- *     a TODOS los clientes conectados (no solo al solicitante).
- *   - Los tipos cubiertos:
- *       NEW_MESSAGE_RESPONSE, NEW_CHATROOM_RESPONSE,
- *       ADD_USER_RESPONSE, REMOVE_USER_RESPONSE,
- *       DELETE_MESSAGE_RESPONSE, DELETE_CHATROOM_RESPONSE,
- *       CREATE_ACCOUNT_RESPONSE, JOIN_REQUEST_RESPONSE
- *   - USER_ONLINE sigue usando su propio broadcast independiente.
+ * CORRECCIÓN UDP:
+ *   - shm_register_user() ahora acepta ip y port por separado.
+ *   - En AUTH y CREATE_ACCOUNT, se leen "udpIp" y "udpPort" del JSON
+ *     que el cliente Python envía, en lugar de usar la IP del socket TCP
+ *     (que dentro de Docker NAT llega como 127.0.0.1).
+ *   - El log de unicast ahora muestra cuántos clientes se notifican.
  */
 
 #include <stdio.h>
@@ -28,22 +25,22 @@
 #include <arpa/inet.h>
 #include <sys/mman.h>
 #include <ifaddrs.h>
-#include <errno.h>   // para MSG_DONTWAIT
+#include <errno.h>
 
 #include "cJSON.h"
 
- /* ============================================================
-    LOGGER
-    ============================================================ */
+/* ============================================================
+   LOGGER
+   ============================================================ */
 #define LOG(fmt, ...)                    \
     do {                                 \
         printf(fmt "\n", ##__VA_ARGS__); \
         fflush(stdout);                  \
     } while (0)
 
-    /* ============================================================
-       CONSTANTES
-       ============================================================ */
+/* ============================================================
+   CONSTANTES
+   ============================================================ */
 #define TCP_PORT      5006
 #define UDP_PORT      5001
 #define DB_HOST       "172.18.2.3"
@@ -62,7 +59,7 @@ typedef struct {
     char username[64];
     int  active;
     char udp_ip[64];
-    int  udp_port;   /* 0 = desconocido, se llena desde la IP del TCP */
+    int  udp_port;
 } ShmUser;
 
 typedef struct {
@@ -118,31 +115,26 @@ static void udp_send_to(const char* ip, int port, const char* json_str)
 
 /* ============================================================
    UDP BROADCAST — notifica a TODOS los clientes activos
-   (copia la lista bajo mutex y envía sin retenerlo, con MSG_DONTWAIT)
    ============================================================ */
 static void udp_broadcast_all(const char* json_str, int skip_uid)
 {
     char buf[BUFSIZE];
     int  len = snprintf(buf, sizeof(buf), "%s\n", json_str);
 
-    // 1. Broadcast a 255.255.255.255
+    /* Broadcast a 255.255.255.255 — fallback para redes sin NAT */
     {
         struct sockaddr_in bcast;
         memset(&bcast, 0, sizeof(bcast));
         bcast.sin_family      = AF_INET;
         bcast.sin_port        = htons(UDP_PORT);
         bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
-        ssize_t r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-                           (struct sockaddr*)&bcast, sizeof(bcast));
-        if (r < 0)
-            LOG("[UDP-BROADCAST] ❌ FALLO broadcast 255.255.255.255:%d  errno=%d (%s)",
-                UDP_PORT, errno, strerror(errno));
-        else
-            LOG("[UDP-BROADCAST] ✅ %zd bytes → 255.255.255.255:%d  tipo=%s",
-                r, UDP_PORT, json_str);
+        sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
+               (struct sockaddr*)&bcast, sizeof(bcast));
+        LOG("[UDP-BROADCAST] ✅ %d bytes → 255.255.255.255:%d  tipo=%s",
+            len, UDP_PORT, json_str);
     }
 
-    // 2. Unicast a cada cliente registrado
+    /* Unicast a cada cliente registrado con su IP y puerto real */
     pthread_mutex_lock(&g_state->lock);
     ShmUser active[MAX_USERS];
     int count = 0;
@@ -164,15 +156,10 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
         dest.sin_family = AF_INET;
         dest.sin_port   = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
-        ssize_t r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-                           (struct sockaddr*)&dest, sizeof(dest));
-        if (r < 0)
-            LOG("[UDP-UNICAST] ❌ FALLO uid=%d %s:%d  errno=%d (%s)",
-                active[i].db_user_id, active[i].udp_ip, active[i].udp_port,
-                errno, strerror(errno));
-        else
-            LOG("[UDP-UNICAST] ✅ %zd bytes → uid=%d %s:%d",
-                r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
+        int r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
+                       (struct sockaddr*)&dest, sizeof(dest));
+        LOG("[UDP-UNICAST] ✅ %d bytes → uid=%d %s:%d",
+            r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
 }
 
@@ -198,40 +185,23 @@ static void udp_notify_user(int db_user_id, const char* json_str)
 
 /* ============================================================
    on_data_change()
-
-   Se llama después de que el database_server responde a cualquier
-   comando mutante. Detecta el tipo de respuesta y hace broadcast
-   UDP a todos los clientes afectados para que actualicen su
-   local_DB.
-
-   Parámetro:
-     resp_json : línea JSON ya procesada (una sola línea)
-     sender_uid: uid del cliente que hizo la petición original
-                 (lo excluye del broadcast si él ya recibió la
-                  respuesta por TCP directo)
    ============================================================ */
 static void on_data_change(const char* resp_json, int sender_uid)
 {
     cJSON* obj = cJSON_Parse(resp_json);
     if (!obj) return;
 
-    cJSON* jtype = cJSON_GetObjectItem(obj, "type");
+    cJSON* jtype   = cJSON_GetObjectItem(obj, "type");
     cJSON* jsuccess = cJSON_GetObjectItem(obj, "success");
 
     if (!cJSON_IsString(jtype)) { cJSON_Delete(obj); return; }
 
-    const char* type = jtype->valuestring;
+    const char* type    = jtype->valuestring;
     int         success = cJSON_IsNumber(jsuccess) ? jsuccess->valueint : 0;
 
     LOG("[ON_DATA_CHANGE] tipo=%s success=%d", type, success);
 
-    /* Solo propagamos respuestas exitosas de operaciones que
-       modifican estado.  La AUTH_RESPONSE y CREATE_ACCOUNT_RESPONSE
-       se manejan por separado (USER_ONLINE broadcast). */
-
     if (!success) { cJSON_Delete(obj); return; }
-
-    /* ---- Tipos que deben sincronizarse en todos los clientes ---- */
 
     int broadcast = 0;
 
@@ -242,33 +212,40 @@ static void on_data_change(const char* resp_json, int sender_uid)
     if (strcmp(type, "DELETE_MESSAGE_RESPONSE") == 0)  broadcast = 1;
     if (strcmp(type, "DELETE_CHATROOM_RESPONSE") == 0) broadcast = 1;
     if (strcmp(type, "JOIN_REQUEST_RESPONSE") == 0)    broadcast = 1;
-    if (strcmp(type, "REQUEST_RESPONSE") == 0)         broadcast = 1;  // ← add
-    if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;  // ← add
+    if (strcmp(type, "REQUEST_RESPONSE") == 0)         broadcast = 1;
+    if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;
 
-    if (broadcast) {
-        /* Notificar a todos los clientes conectados excepto al remitente
-           (él ya recibió la respuesta por TCP).
-           udp_broadcast_all es más robusto que envío unicast: funciona
-           aunque el IP almacenado sea incorrecto por Docker NAT, y evita
-           perder notificaciones cuando notifyUsers solo contiene al sender. */
+    if (broadcast)
         udp_broadcast_all(resp_json, sender_uid);
-    }
 
     cJSON_Delete(obj);
 }
 
 /* ============================================================
-   broadcast_user_online — notifica a todos los clientes registrados
-   que un usuario se conectó, usando el mismo unicast que on_data_change.
+   broadcast_user_online
    ============================================================ */
 static void broadcast_user_online(int user_id, const char* username)
 {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) { perror("broadcast socket"); return; }
+
+    int on = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(UDP_PORT);
+    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n",
         user_id, username);
-    LOG("[UDP USER_ONLINE] uid=%d username=%s", user_id, username);
-    udp_broadcast_all(buf, user_id);
+    sendto(sock, buf, strlen(buf), 0,
+        (struct sockaddr*)&addr, sizeof(addr));
+    LOG("[UDP BROADCAST USER_ONLINE] uid=%d username=%s", user_id, username);
+    close(sock);
 }
 
 /* ============================================================
@@ -317,16 +294,20 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
 
 /* ============================================================
    SHARED MEMORY — registrar / eliminar usuario
+   CORRECCIÓN: ahora recibe ip y port explícitamente en lugar
+   de asumir siempre UDP_PORT. Esto permite usar el puerto
+   efímero que el cliente Python reporta en el JSON de AUTH.
    ============================================================ */
-static void shm_register_user(int uid, const char* uname, const char* ip, int udp_port)
+static void shm_register_user(int uid, const char* uname, const char* ip, int port)
 {
-    if (udp_port <= 0) udp_port = UDP_PORT;
     pthread_mutex_lock(&g_state->lock);
-    /* Si el usuario ya existe (reconexión) */
+    /* Reconexión — actualizar IP y puerto */
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
-            strncpy(g_state->users[i].udp_ip, ip, sizeof(g_state->users[i].udp_ip) - 1);
-            g_state->users[i].udp_port = udp_port;
+            strncpy(g_state->users[i].udp_ip, ip,
+                    sizeof(g_state->users[i].udp_ip) - 1);
+            g_state->users[i].udp_port = port;
+            LOG("[SHM] Reconexión uid=%d ip=%s port=%d", uid, ip, port);
             pthread_mutex_unlock(&g_state->lock);
             return;
         }
@@ -337,13 +318,13 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int ud
             ShmUser* su = &g_state->users[i];
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
-            su->active = 1;
-            su->udp_port = udp_port;
+            su->active     = 1;
+            su->udp_port   = port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
+            strncpy(su->udp_ip,   ip,    sizeof(su->udp_ip)   - 1);
             g_state->user_count++;
-            LOG("[SHM] Registrado uid=%d username=%s ip=%s udp_port=%d slot=%d",
-                uid, uname, ip, udp_port, i);
+            LOG("[SHM] Registrado uid=%d username=%s ip=%s port=%d slot=%d",
+                uid, uname, ip, port, i);
             break;
         }
     }
@@ -362,6 +343,34 @@ static void shm_unregister_user(int uid)
         }
     }
     pthread_mutex_unlock(&g_state->lock);
+}
+
+/* ============================================================
+   HELPER — extraer udpIp y udpPort del JSON de AUTH/CREATE_ACCOUNT
+   Devuelve la IP y puerto UDP que el cliente reportó.
+   Si no vienen en el JSON, usa client_ip y UDP_PORT como fallback.
+   ============================================================ */
+static void extract_udp_info(cJSON* req, const char* client_ip,
+                              char* out_ip, int ip_size, int* out_port)
+{
+    cJSON* judp_ip   = cJSON_GetObjectItem(req, "udpIp");
+    cJSON* judp_port = cJSON_GetObjectItem(req, "udpPort");
+
+    /* IP: usar la que el cliente reportó si viene y no es vacía */
+    if (judp_ip && cJSON_IsString(judp_ip) && strlen(judp_ip->valuestring) > 3)
+        strncpy(out_ip, judp_ip->valuestring, ip_size - 1);
+    else
+        strncpy(out_ip, client_ip, ip_size - 1);
+
+    out_ip[ip_size - 1] = '\0';
+
+    /* Puerto: usar el que el cliente reportó si viene y es válido */
+    if (judp_port && cJSON_IsNumber(judp_port) && judp_port->valueint > 0)
+        *out_port = judp_port->valueint;
+    else
+        *out_port = UDP_PORT;
+
+    LOG("[UDP-INFO] Cliente reportó udpIp=%s udpPort=%d", out_ip, *out_port);
 }
 
 /* ============================================================
@@ -392,6 +401,7 @@ static void atender_cliente(int sock, const char* client_ip)
         int lines = db_request(req_buf, resp_buf, sizeof(resp_buf));
         if (lines < 0) { cJSON_Delete(req); close(sock); exit(1); }
 
+        /* ── CREATE_ACCOUNT ── */
         if (strcmp(type, "CREATE_ACCOUNT") == 0) {
             int ok = 0;
             char copy[BUFSIZE];
@@ -409,7 +419,8 @@ static void atender_cliente(int sock, const char* client_ip)
                             cJSON* jn = cJSON_GetObjectItem(j, "username");
                             if (ju) uid = ju->valueint;
                             if (jn && jn->valuestring)
-                                strncpy(username, jn->valuestring, sizeof(username) - 1);
+                                strncpy(username, jn->valuestring,
+                                        sizeof(username) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -417,13 +428,13 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                cJSON* judp  = cJSON_GetObjectItem(req, "udpPort");
-                cJSON* jip   = cJSON_GetObjectItem(req, "udpIp");
-                int  udp_port = (judp && cJSON_IsNumber(judp)) ? judp->valueint : 0;
-                const char* udp_ip = (jip && cJSON_IsString(jip) && jip->valuestring[0])
-                                     ? jip->valuestring : client_ip;
-                shm_register_user(uid, username, udp_ip, udp_port);
-                LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d", uid, username, udp_ip, udp_port);
+                /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
+                char reg_ip[64] = "";
+                int  reg_port   = UDP_PORT;
+                extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
+                shm_register_user(uid, username, reg_ip, reg_port);
+                LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d",
+                    uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
                 cJSON_Delete(req);
                 break;
@@ -433,6 +444,7 @@ static void atender_cliente(int sock, const char* client_ip)
             continue;
         }
 
+        /* ── AUTH ── */
         if (strcmp(type, "AUTH") == 0) {
             int ok = 0;
             char copy[BUFSIZE];
@@ -461,13 +473,13 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                cJSON* judp  = cJSON_GetObjectItem(req, "udpPort");
-                cJSON* jip   = cJSON_GetObjectItem(req, "udpIp");
-                int  udp_port = (judp && cJSON_IsNumber(judp)) ? judp->valueint : 0;
-                const char* udp_ip = (jip && cJSON_IsString(jip) && jip->valuestring[0])
-                                     ? jip->valuestring : client_ip;
-                shm_register_user(uid, username, udp_ip, udp_port);
-                LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d", uid, username, udp_ip, udp_port);
+                /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
+                char reg_ip[64] = "";
+                int  reg_port   = UDP_PORT;
+                extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
+                shm_register_user(uid, username, reg_ip, reg_port);
+                LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d",
+                    uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
             }
             else {
@@ -499,25 +511,12 @@ static void atender_cliente(int sock, const char* client_ip)
         char* line = strtok(copy, "\n");
         while (line) {
             if (line[0]) {
-                /* 1. Reenviar al cliente que hizo la petición */
                 LOG("[HIJO-SESION] → cliente uid=%d: '%s'", uid, line);
                 send_line(sock, line);
-
-                /* 2. on_data_change: notificar a los demás vía UDP */
                 on_data_change(line, uid);
             }
             line = strtok(NULL, "\n");
         }
-    }
-
-    /* Notificar a todos antes de eliminar al usuario del registro */
-    if (uid > 0) {
-        char offline_buf[256];
-        snprintf(offline_buf, sizeof(offline_buf),
-            "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\"}",
-            uid, username);
-        LOG("[UDP USER_OFFLINE] uid=%d username=%s", uid, username);
-        udp_broadcast_all(offline_buf, uid);
     }
 
     shm_unregister_user(uid);
@@ -527,28 +526,8 @@ static void atender_cliente(int sock, const char* client_ip)
 }
 
 /* ============================================================
-   HILO UDP — (opcional, ahora comentado en main)
+   DB PING
    ============================================================ */
-   /*
-   static void* hilo_udp(void* arg)
-   {
-       (void)arg;
-       char buf[BUFSIZE];
-       struct sockaddr_in src;
-       socklen_t slen = sizeof(src);
-       LOG("[UDP-HILO] Escuchando en puerto %d", UDP_PORT);
-       while (1) {
-           int n = recvfrom(g_udp_sd, buf, sizeof(buf) - 1, 0,
-               (struct sockaddr*)&src, &slen);
-           if (n > 0) { buf[n] = '\0'; LOG("[UDP-HILO] Entrante: %s", buf); }
-       }
-       return NULL;
-   }
-   */
-
-   /* ============================================================
-      DB PING
-      ============================================================ */
 static int db_ping(void)
 {
     LOG("[DB-PING] Probando %s:%d ...", g_db_host, g_db_port);
@@ -607,43 +586,35 @@ int main(int argc, char* argv[])
     g_udp_sd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_udp_sd < 0) { perror("udp socket"); exit(1); }
 
-    /* SO_BROADCAST: necesario para poder enviar a 255.255.255.255 */
     int bcast = 1;
     setsockopt(g_udp_sd, SOL_SOCKET, SO_BROADCAST, &bcast, sizeof(bcast));
 
-    /* Bind a puerto 0 → el SO asigna uno efímero */
     struct sockaddr_in ua;
     memset(&ua, 0, sizeof(ua));
-    ua.sin_family = AF_INET;
+    ua.sin_family      = AF_INET;
     ua.sin_addr.s_addr = INADDR_ANY;
-    ua.sin_port = 0;
+    ua.sin_port        = 0;  /* puerto efímero */
     if (bind(g_udp_sd, (struct sockaddr*)&ua, sizeof(ua)) < 0) {
         perror("udp bind"); exit(1);
     }
 
-    /* El hilo de escucha UDP ya no es necesario (solo imprimía logs).
-       Lo comentamos para liberar el puerto 5001 y evitar conflictos. */
-       // pthread_t tid;
-       // pthread_create(&tid, NULL, hilo_udp, NULL);
-       // pthread_detach(tid);
-
-       /* Socket TCP */
+    /* Socket TCP */
     g_tcp_sd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_tcp_sd < 0) { perror("tcp socket"); exit(1); }
     int opt = 1;
     setsockopt(g_tcp_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in ta;
     memset(&ta, 0, sizeof(ta));
-    ta.sin_family = AF_INET;
+    ta.sin_family      = AF_INET;
     ta.sin_addr.s_addr = INADDR_ANY;
-    ta.sin_port = htons(TCP_PORT);
+    ta.sin_port        = htons(TCP_PORT);
     if (bind(g_tcp_sd, (struct sockaddr*)&ta, sizeof(ta)) < 0) {
         perror("tcp bind"); exit(1);
     }
     if (listen(g_tcp_sd, 10) < 0) { perror("listen"); exit(1); }
 
     signal(SIGCHLD, sig_chld);
-    signal(SIGINT, sig_int);
+    signal(SIGINT,  sig_int);
 
     if (!db_ping())
         LOG("[PADRE] ADVERTENCIA: DB no alcanzable");
@@ -667,6 +638,7 @@ int main(int argc, char* argv[])
     LOG(" Puerto TCP       : %d", TCP_PORT);
     LOG(" Puerto UDP       : %d  (onDataChange broadcast)", UDP_PORT);
     LOG(" Database         : %s:%d", g_db_host, g_db_port);
+    LOG(" udpIp/udpPort    : leídos del JSON de AUTH/CREATE_ACCOUNT");
     LOG("==================================================");
 
     while (1) {

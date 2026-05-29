@@ -1,5 +1,10 @@
 ﻿/*
  * chatServerJson.c — Servidor de chat (proxy al database_server)
+ 
+
+gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServerJson
+
+
  *
  * Arquitectura:
  * Cliente <──TCP:5006──> chatServerJson <──TCP:8080──> database_server
@@ -591,9 +596,9 @@ int main(int argc, char* argv[])
 
     struct sockaddr_in ua;
     memset(&ua, 0, sizeof(ua));
-    ua.sin_family      = AF_INET;
+    ua.sin_family = AF_INET;
     ua.sin_addr.s_addr = INADDR_ANY;
-    ua.sin_port        = 0;  /* puerto efímero */
+    ua.sin_port = 0;  /* puerto efímero */
     if (bind(g_udp_sd, (struct sockaddr*)&ua, sizeof(ua)) < 0) {
         perror("udp bind"); exit(1);
     }
@@ -605,16 +610,16 @@ int main(int argc, char* argv[])
     setsockopt(g_tcp_sd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in ta;
     memset(&ta, 0, sizeof(ta));
-    ta.sin_family      = AF_INET;
+    ta.sin_family = AF_INET;
     ta.sin_addr.s_addr = INADDR_ANY;
-    ta.sin_port        = htons(TCP_PORT);
+    ta.sin_port = htons(TCP_PORT);
     if (bind(g_tcp_sd, (struct sockaddr*)&ta, sizeof(ta)) < 0) {
         perror("tcp bind"); exit(1);
     }
     if (listen(g_tcp_sd, 10) < 0) { perror("listen"); exit(1); }
 
     signal(SIGCHLD, sig_chld);
-    signal(SIGINT,  sig_int);
+    signal(SIGINT, sig_int);
 
     if (!db_ping())
         LOG("[PADRE] ADVERTENCIA: DB no alcanzable");
@@ -641,20 +646,59 @@ int main(int argc, char* argv[])
     LOG(" udpIp/udpPort    : leídos del JSON de AUTH/CREATE_ACCOUNT");
     LOG("==================================================");
 
+    /* ============================================================
+    LOOP PRINCIPAL DE CONEXIONES (en el main de chatServerJson.c
+    ============================================================ */
     while (1) {
         struct sockaddr_in ca;
         socklen_t clen = sizeof(ca);
         int cfd = accept(g_tcp_sd, (struct sockaddr*)&ca, &clen);
-        if (cfd < 0) { perror("accept"); continue; }
+        if (cfd < 0) {
+            if (errno == EINTR) continue;
+            perror("accept");
+            continue;
+        }
 
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &ca.sin_addr, ip, sizeof(ip));
-        LOG("[PADRE] Nueva conexión TCP desde %s", ip);
+        char client_ip[64] = "";
+        strncpy(client_ip, inet_ntoa(ca.sin_addr), sizeof(client_ip) - 1);
 
+        // Hacemos el fork de inmediato para no bloquear la atención de otros sockets
         pid_t pid = fork();
-        if (pid < 0) { perror("fork"); close(cfd); continue; }
-        if (pid == 0) { close(g_tcp_sd); atender_cliente(cfd, ip); }
-        close(cfd);
+        if (pid == 0) {
+            // ─────────────────────────────────────────────────────────────────
+            // ─── DENTRO DEL PROCESO HIJO ─────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────────
+            close(g_tcp_sd); // El hijo no necesita el socket de escucha general
+
+            char peek_buf[16];
+            memset(peek_buf, 0, sizeof(peek_buf));
+
+            // "Espiamos" los primeros 12 bytes del socket sin consumirlos de la cola
+            int pbytes = recv(cfd, peek_buf, 12, MSG_PEEK);
+            if (pbytes > 0 && strncmp(peek_buf, "HEALTH_CHECK", 12) == 0) {
+                // ¡Confirmado! Es el Load Balancer.
+                char discard[32];
+                printf("[HEALTHCHECK] -> Estado OK (Verificado por LB)\n"); fflush(stdout);
+                recv(cfd, discard, sizeof(discard), 0); // Vaciamos el socket
+                close(cfd);
+                exit(0); // El hijo muere en SILENCIO ABSOLUTO (sin logs)
+            }
+
+            // ─────────────────────────────────────────────────────────────────
+            // ─── SI NO ES UN HEALTH CHECK (ES UN CLIENTE REAL DE PYTHON) ─────
+            // ─────────────────────────────────────────────────────────────────
+            // Imprimimos el log del Padre (simulado desde el hijo) y procedemos
+            printf("[PADRE] Nueva conexión TCP desde %s\n", client_ip);
+            fflush(stdout);
+
+            // Llamamos a la función normal para procesar el login/sesión
+            atender_cliente(cfd, client_ip);
+            exit(0);
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // ─── DENTRO DEL PROCESO PADRE GENERAL ────────────────────────────
+        // ─────────────────────────────────────────────────────────────────
+        close(cfd); // El padre cierra su copia del socket cliente y sigue escuchando
     }
-    return 0;
 }

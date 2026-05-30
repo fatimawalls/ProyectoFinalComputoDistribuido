@@ -74,6 +74,11 @@ class NetworkClient:
         self._buf       = ""          # buffer TCP parcial
         self._sync_lock = threading.Event()  # se setea al terminar el sync
 
+        # UDP callback info reported to chatServerJson after TCP connects.
+        self.udp_socket = None
+        self.udp_ip     = ""
+        self.udp_port   = 0
+
         # ── Estado en memoria ────────────────────────────────────
         self.me       = {}            # {"id": int, "username": str}
         self.rooms    = {}            # {room_id: {id, name, coordinatorId, userIds}}
@@ -102,33 +107,100 @@ class NetworkClient:
     # CONEXIÓN
     # ═══════════════════════════════════════════════════════════════
 
+    def ask_loadbalancer(self, lb_ip: str = "127.0.0.1", lb_port: int = 4000) -> tuple[str, int] | None:
+        """
+        Pregunta al Load Balancer qué chatServer usar.
+
+        El LB responde:
+            {"success":1,"ip":"...","port":5006}
+
+        Returns:
+            (ip, port) si hay servidor disponible, None si falla.
+        """
+        print(f"[LB] Consultando load balancer {lb_ip}:{lb_port}...")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as lb_socket:
+                lb_socket.settimeout(5)
+                lb_socket.connect((lb_ip, lb_port))
+
+                data = b""
+                while b"\n" not in data:
+                    chunk = lb_socket.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+
+            raw = data.decode(ENCODING, errors="replace").strip()
+            print(f"[LB] Respuesta: {raw}")
+
+            obj = json.loads(raw)
+            if not obj.get("success"):
+                print(f"[LB] Sin servidor disponible: {obj.get('error', 'error desconocido')}")
+                return None
+
+            return obj["ip"], int(obj["port"])
+
+        except Exception as e:
+            print(f"[LB] Error consultando load balancer: {e}")
+            return None
+
+    def _guess_udp_ip(self, server_ip: str) -> str:
+        """
+        IP que el server usará para devolver eventos UDP.
+
+        Para servidores LAN normalmente es la IP local de salida.
+        En localhost/Docker puede requerir ajuste manual, pero este valor
+        es mejor que hardcodear 127.0.0.1 para todos los casos.
+        """
+        try:
+            if self.socket:
+                local_ip = self.socket.getsockname()[0]
+                if local_ip:
+                    return local_ip
+        except Exception:
+            pass
+
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect((server_ip, 9))
+            local_ip = probe.getsockname()[0]
+            probe.close()
+            return local_ip
+        except Exception:
+            return "127.0.0.1"
+
     def connect(self, ip="127.0.0.1", port=5000) -> bool:
-        """Abre el socket TCP y el socket UDP de escucha."""
+        """Abre el socket TCP y prepara el socket UDP para eventos push."""
         print(f"[RED] Conectando a {ip}:{port}...")
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((ip, port))
             self.connected = True
             print("[RED] ¡Conexión TCP establecida!")
-            threading.Thread(target=self._listen_loop, daemon=True).start()
 
-            # --- NUEVO: HILO PARA ESCUCHAR BROADCASTS UDP ---
+            # UDP push listener.
+            # Puerto dinámico para permitir varios clientes en la misma máquina.
             try:
                 self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                # IMPORTANTE: Permite que varios clientes en la misma PC escuchen el 5001
                 self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, 'SO_REUSEPORT'):
+                if hasattr(socket, "SO_REUSEPORT"):
                     self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                
-                # Escuchamos en el puerto 5001 (en todas las interfaces "")
-                self.udp_socket.bind(("", 5001))
+
+                self.udp_socket.bind(("", 0))
+                self.udp_port = self.udp_socket.getsockname()[1]
+                self.udp_ip = self._guess_udp_ip(ip)
+
                 threading.Thread(target=self._udp_listen_loop, daemon=True).start()
-                print("[RED] ¡Escuchando Broadcasts UDP en el puerto 5001!")
+                print(f"[RED-UDP] Escuchando en {self.udp_ip}:{self.udp_port}")
             except Exception as udp_e:
                 print(f"[RED] Advertencia UDP: No se pudo iniciar la escucha: {udp_e}")
-            # ------------------------------------------------
+                self.udp_socket = None
+                self.udp_ip = ""
+                self.udp_port = 0
 
+            threading.Thread(target=self._listen_loop, daemon=True).start()
             return True
+
         except Exception as e:
             print(f"[RED] Error al conectar: {e}")
             self.connected = False
@@ -205,20 +277,20 @@ class NetworkClient:
             "type":     "AUTH",
             "username": username,
             "password": password,
+            "udpIp":    self.udp_ip,
+            "udpPort":  self.udp_port,
         })
 
     def register(self, username: str, password: str, nickname: str | None = None):
         """Envía CREATE_ACCOUNT al servidor."""
-        payload = {
+        self._send({
             "type":     "CREATE_ACCOUNT",
             "username": username,
             "password": password,
-        }
-
-        if nickname is not None:
-            payload["nickname"] = nickname
-
-        self._send(payload)
+            "nickname": nickname or username,
+            "udpIp":    self.udp_ip,
+            "udpPort":  self.udp_port,
+        })
 
     def send_message(self, room_id: int, text: str, user_id: int | None = None):
         """Envía NEW_MESSAGE. El servidor actualiza la DB y hace broadcast."""

@@ -9,15 +9,31 @@ from network.networkClient import NetworkClient
 C_SERVER_IP   = "127.0.0.1"
 C_SERVER_PORT = 5006
 
+# Load Balancer opcional.
+# Si USE_LOAD_BALANCER=True, el cliente pregunta al LB a qué chat server conectarse.
+USE_LOAD_BALANCER = True
+LB_IP   = "127.0.0.1"
+LB_PORT = 4000
+
 
 class AppController:
-    def __init__(self, server_ip=C_SERVER_IP, server_port=C_SERVER_PORT):
+    def __init__(
+        self,
+        server_ip=C_SERVER_IP,
+        server_port=C_SERVER_PORT,
+        use_load_balancer=USE_LOAD_BALANCER,
+        lb_ip=LB_IP,
+        lb_port=LB_PORT,
+    ):
         self.network = NetworkClient()
         self.current_user = None
 
         # ── Guardamos los parámetros dinámicos de conexión ────────────
         self.server_ip = server_ip
         self.server_port = server_port
+        self.use_load_balancer = use_load_balancer
+        self.lb_ip = lb_ip
+        self.lb_port = lb_port
 
         self.login_window    = None
         self.register_window = None
@@ -37,8 +53,6 @@ class AppController:
 
         self.network.on_user_online         = self.on_user_online_received
         self.network.on_user_offline        = self.on_user_offline_received
-        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
-        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # ARRANQUE DEL CONTROLLER
@@ -98,7 +112,6 @@ class AppController:
             self.login_window = None
 
         username = self.network.me.get("username", self.current_user or "")
-        nickname = self.network.me.get("nickname", username)
 
         # Reutilizamos la ventana raíz principal de Tkinter para el lobby
         self.root.deiconify()
@@ -106,7 +119,7 @@ class AppController:
         app = ChatClientGUI(
             self.root,
             username=username,
-            nickname=nickname,
+            nickname=username,
             network=self.network,
         )
 
@@ -122,8 +135,6 @@ class AppController:
         self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
         self.network.on_server_disconnected = self.on_server_disconnected
         self.network.on_user_offline        = self.on_user_offline_received
-        self.network.on_all_users_loaded    = self.on_all_users_loaded_received
-        self.network.on_all_rooms_loaded    = self.on_all_rooms_loaded_received
 
     # ─────────────────────────────────────────────────────────────
     # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)
@@ -132,22 +143,45 @@ class AppController:
     def _conectar(self) -> bool:
         if self.network.connected:
             return True
-        # Consume de forma dinámica la configuración provista por la instancia
-        print(f"[CONTROLADOR] Conectando a {self.server_ip}:{self.server_port}...")
-        ok = self.network.connect(self.server_ip, self.server_port)
+
+        target_ip = self.server_ip
+        target_port = self.server_port
+
+        if self.use_load_balancer:
+            assignment = self.network.ask_loadbalancer(self.lb_ip, self.lb_port)
+
+            if assignment is None:
+                self._mostrar_error_red(
+                    extra=f"No se pudo obtener servidor desde Load Balancer {self.lb_ip}:{self.lb_port}."
+                )
+                return False
+
+            target_ip, target_port = assignment
+            print(f"[CONTROLADOR] LB asignó chat server {target_ip}:{target_port}")
+
+        print(f"[CONTROLADOR] Conectando a {target_ip}:{target_port}...")
+        ok = self.network.connect(target_ip, target_port)
+
         if not ok:
-            self._mostrar_error_red()
+            self._mostrar_error_red(
+                extra=f"No se pudo conectar a {target_ip}:{target_port}."
+            )
+
         return ok
 
-    def _mostrar_error_red(self):
+    def _mostrar_error_red(self, extra=None):
         ventana = self.login_window or self.register_window
+        msg = extra or (
+            f"No se pudo conectar a {self.server_ip}:{self.server_port}.\n"
+            "Verifica que el servidor esté encendido."
+        )
+
         if ventana and hasattr(ventana, "lbl_error"):
-            ventana.lbl_error.config(text="◆ No se pudo conectar al servidor.")
+            ventana.lbl_error.config(text=f"◆ {msg}")
         else:
             messagebox.showerror(
                 "Error de Red",
-                f"No se pudo conectar a {self.server_ip}:{self.server_port}.\n"
-                "Verifica que el servidor esté encendido.",
+                msg,
                 parent=self.root,
             )
 
@@ -162,8 +196,8 @@ class AppController:
         self.current_user = user
         if not self._conectar():
             return
-        self.network.register(user, pwd, nick or user)
-        print(f"[CONTROLADOR] CREATE_ACCOUNT enviado para '{user}'.")
+        self.network.register(user, pwd, nick)
+        print(f"[CONTROLADOR] CREATE_ACCOUNT enviado para '{user}' con nickname '{nick or user}'.")
 
     # ─────────────────────────────────────────────────────────────
     # CALLBACKS ASÍNCRONOS (Hilos de Red ──> .after() ──> Hilo Principal GUI)
@@ -186,18 +220,15 @@ class AppController:
                 messagebox.showerror("Error de Autenticación", message, parent=self.root)
 
     def on_sync_complete_received(self):
-        print("[CONTROLADOR] Sync completo → abriendo lobby con datos globales")
-        self.root.after(0, self.show_lobby)
+        """
+        El sync inicial ya trae TODO:
+        - usuarios
+        - salas
+        - mensajes
 
-
-    def on_all_users_loaded_received(self):
-        """Se dispara de forma asíncrona cuando GET_USERS terminó de recibirse."""
-        print("[CONTROLADOR] Lista completa de usuarios recibida")
-        self.root.after(0, self._try_open_lobby)
-
-    def on_all_rooms_loaded_received(self):
-        """Se dispara de forma asíncrona cuando GET_ROOMS terminó de recibirse."""
-        print("[CONTROLADOR] Lista completa de salas recibida")
+        Por eso ya no se hacen GET_USERS ni GET_ROOMS.
+        """
+        print("[CONTROLADOR] Sync completo → abriendo lobby con la base local cargada")
         self.root.after(0, self._try_open_lobby)
 
     def _try_open_lobby(self):
@@ -275,18 +306,60 @@ class AppController:
 if __name__ == "__main__":
     server_ip = C_SERVER_IP
     server_port = C_SERVER_PORT
+    use_lb = USE_LOAD_BALANCER
+    lb_ip = LB_IP
+    lb_port = LB_PORT
 
-    # Validación e inyección de argumentos pasados por consola (sys.argv)
-    if len(sys.argv) > 1:
-        server_ip = sys.argv[1]
-    if len(sys.argv) > 2:
-        try:
-            server_port = int(sys.argv[2])
-        except ValueError:
-            print(f"[ERROR] El puerto '{sys.argv[2]}' debe ser un número entero. Usando por defecto: {server_port}")
+    # Uso:
+    #   python AppController.py
+    #   python AppController.py --no-lb 127.0.0.1 5006
+    #   python AppController.py --lb 127.0.0.1 4000
+    args = sys.argv[1:]
 
-    print(f"[CONTROLADOR] Configurado para conectar a {server_ip}:{server_port}")
-    
-    # Instanciamos pasándole la configuración leída dinámicamente de los argumentos de consola
-    controller = AppController(server_ip, server_port)
+    if args and args[0] == "--no-lb":
+        use_lb = False
+        args = args[1:]
+
+        if len(args) > 0:
+            server_ip = args[0]
+        if len(args) > 1:
+            try:
+                server_port = int(args[1])
+            except ValueError:
+                print(f"[ERROR] El puerto '{args[1]}' debe ser entero. Usando {server_port}")
+
+    elif args and args[0] == "--lb":
+        use_lb = True
+        args = args[1:]
+
+        if len(args) > 0:
+            lb_ip = args[0]
+        if len(args) > 1:
+            try:
+                lb_port = int(args[1])
+            except ValueError:
+                print(f"[ERROR] El puerto LB '{args[1]}' debe ser entero. Usando {lb_port}")
+
+    elif args:
+        # Compatibilidad vieja: si pasan IP/puerto, conectamos directo.
+        use_lb = False
+        server_ip = args[0]
+        if len(args) > 1:
+            try:
+                server_port = int(args[1])
+            except ValueError:
+                print(f"[ERROR] El puerto '{args[1]}' debe ser entero. Usando {server_port}")
+
+    if use_lb:
+        print(f"[CONTROLADOR] Usando Load Balancer {lb_ip}:{lb_port}")
+    else:
+        print(f"[CONTROLADOR] Conexión directa a {server_ip}:{server_port}")
+
+    controller = AppController(
+        server_ip=server_ip,
+        server_port=server_port,
+        use_load_balancer=use_lb,
+        lb_ip=lb_ip,
+        lb_port=lb_port,
+    )
     controller.run()

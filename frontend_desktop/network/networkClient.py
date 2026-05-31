@@ -339,6 +339,22 @@ class NetworkClient:
             "chatRoomId": room_id,
         })
 
+    def request_join_room(self, room_id: int):
+        """Solicita unirse a una sala. La BD agrega mi id a requestIds."""
+        self._send({
+            "type":       "REQUEST",
+            "chatRoomId": room_id,
+            "userId":     self.me.get("id"),
+        })
+
+    def delete_join_request(self, room_id: int, user_id: int):
+        """El coordinador rechaza/elimina un request pendiente."""
+        self._send({
+            "type":       "DELETE_REQUEST",
+            "chatRoomId": room_id,
+            "userId":     user_id,
+        })
+
     def delete_message(self, message_id: int):
         """Elimina un mensaje por ID."""
         self._send({
@@ -464,6 +480,8 @@ class NetworkClient:
             "NEW_CHATROOM_RESPONSE":    self._on_new_chatroom_response,
             "ADD_USER_RESPONSE":        self._on_add_user_response,
             "REMOVE_USER_RESPONSE":     self._on_remove_user_response,
+            "REQUEST_RESPONSE":         self._on_request_response,
+            "DELETE_REQUEST_RESPONSE":  self._on_delete_request_response,
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
             "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico

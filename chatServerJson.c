@@ -56,6 +56,67 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServ
 char g_db_host[256] = DB_HOST;
 int  g_db_port = DB_PORT;
 
+/* Load Balancer reporting opcional.
+   Uso:
+      ./chatServerJson [db_ip] [db_port] [lb_ip] [lb_udp_port]
+
+   Si lb_ip queda vacío, el server sigue funcionando normal y solo
+   responde health checks TCP del load balancer.
+*/
+char g_lb_host[256] = "";
+int  g_lb_udp_port = 4001;
+
+
+/* ============================================================
+   LOAD BALANCER — reportar connect/disconnect para least connections
+   ============================================================ */
+static void report_load_balancer(const char* event)
+{
+    if (g_lb_host[0] == '\0')
+        return;
+
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return;
+
+    struct sockaddr_in lb;
+    memset(&lb, 0, sizeof(lb));
+    lb.sin_family = AF_INET;
+    lb.sin_port = htons(g_lb_udp_port);
+
+    if (inet_aton(g_lb_host, &lb.sin_addr) == 0) {
+        close(fd);
+        return;
+    }
+
+    char payload[128];
+    snprintf(
+        payload,
+        sizeof(payload),
+        "{\"event\":\"%s\",\"port\":%d}",
+        event,
+        UDP_PORT
+    );
+
+    sendto(
+        fd,
+        payload,
+        strlen(payload),
+        0,
+        (struct sockaddr*)&lb,
+        sizeof(lb)
+    );
+
+    LOG("[LB-REPORT] %s → %s:%d payload=%s",
+        event,
+        g_lb_host,
+        g_lb_udp_port,
+        payload
+    );
+
+    close(fd);
+}
+
 /* ============================================================
    SHARED MEMORY — usuarios conectados
    ============================================================ */
@@ -438,6 +499,7 @@ static void atender_cliente(int sock, const char* client_ip)
                 int  reg_port   = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
+                report_load_balancer("connect");
                 LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
@@ -483,6 +545,7 @@ static void atender_cliente(int sock, const char* client_ip)
                 int  reg_port   = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
+                report_load_balancer("connect");
                 LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
@@ -523,6 +586,9 @@ static void atender_cliente(int sock, const char* client_ip)
             line = strtok(NULL, "\n");
         }
     }
+
+    if (uid > 0)
+        report_load_balancer("disconnect");
 
     shm_unregister_user(uid);
     close(sock);
@@ -574,7 +640,14 @@ int main(int argc, char* argv[])
 {
     if (argc > 1) strncpy(g_db_host, argv[1], sizeof(g_db_host) - 1);
     if (argc > 2) g_db_port = atoi(argv[2]);
+    if (argc > 3) strncpy(g_lb_host, argv[3], sizeof(g_lb_host) - 1);
+    if (argc > 4) g_lb_udp_port = atoi(argv[4]);
+
     LOG("[PADRE] DB → %s:%d", g_db_host, g_db_port);
+    if (g_lb_host[0] != '\0')
+        LOG("[PADRE] Load Balancer reports → %s:%d", g_lb_host, g_lb_udp_port);
+    else
+        LOG("[PADRE] Load Balancer reports deshabilitados");
 
     g_state = mmap(NULL, sizeof(SharedState),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -644,6 +717,7 @@ int main(int argc, char* argv[])
     LOG(" Puerto UDP       : %d  (onDataChange broadcast)", UDP_PORT);
     LOG(" Database         : %s:%d", g_db_host, g_db_port);
     LOG(" udpIp/udpPort    : leídos del JSON de AUTH/CREATE_ACCOUNT");
+    LOG(" LB reporting      : %s", g_lb_host[0] ? "ON" : "OFF");
     LOG("==================================================");
 
     /* ============================================================

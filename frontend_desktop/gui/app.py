@@ -286,10 +286,19 @@ class ChatClientGUI:
 
     def _get_messages(self, room_id):
         if self.network:
-            return [
-                (self._resolve_username(m["userId"]), m["text"])
-                for m in self.network.messages.get(room_id, [])
-            ]
+            rendered = []
+
+            for m in self.network.messages.get(room_id, []):
+                if m.get("userId") == 0:
+                    rendered.append(("__SYSTEM__", m.get("text", "")))
+                else:
+                    rendered.append((
+                        self._resolve_username(m.get("userId")),
+                        m.get("text", "")
+                    ))
+
+            return rendered
+
         return self.mock.get_messages(room_id)
 
     def _resolve_username(self, user_id):
@@ -299,6 +308,7 @@ class ChatClientGUI:
 
         if self.network:
             u = self.network.users.get(user_id)
+
             if u:
                 return (
                     u.get("nickname")
@@ -318,11 +328,22 @@ class ChatClientGUI:
     def _get_all_users(self):
         if self.network:
             my_id = self.network.me.get("id")
+
             return [
-                {"username": str(u["id"]), "nickname": u.get("name", "?"), "online": True}
+                {
+                    "username": str(u["id"]),
+                    "nickname": (
+                        u.get("nickname")
+                        or u.get("name")
+                        or u.get("username")
+                        or f"User_{u['id']}"
+                    ),
+                    "online": bool(u.get("online", False))
+                }
                 for u in self.network.users.values()
                 if u["id"] != my_id
             ]
+
         return self.mock.get_all_users()
 
     def _is_member(self, room_id):
@@ -377,7 +398,7 @@ class ChatClientGUI:
             for user in users:
                 row = tk.Frame(self.users_frame, bg=self.BG_DARK)
                 row.pack(fill="x", pady=1)
-                dot_color = self.SUCCESS_COLOR if user.get("online") else self.TEXT_MUTED
+                dot_color = self.SUCCESS_COLOR if user.get("online") else self.ERROR_COLOR
                 tk.Label(row, text="●", font=("Segoe UI", 8),
                          bg=self.BG_DARK, fg=dot_color).pack(side="left", padx=(8, 4))
                 tk.Label(row, text=user["nickname"], font=self.FONT_SMALL,
@@ -672,11 +693,7 @@ class ChatClientGUI:
                  bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
 
         if is_coord:
-            if self.network:
-                requests_count = len(room.get("requestIds", []))
-            else:
-                requests_count = len(self.mock.get_join_requests(room_id))
-
+            requests_count = len(room.get("requestIds", [])) if self.network else len(self.mock.get_join_requests(room_id))
             manage_text    = "⚙ Manage Room" + (f"  [{requests_count}]" if requests_count > 0 else "")
             btn_manage = tk.Label(header, text=manage_text, font=self.FONT_UI_BOLD,
                                   bg=self.BG_MAIN, fg=self.ACCENT, cursor="hand2")
@@ -801,8 +818,8 @@ class ChatClientGUI:
             user_ids_list = room.get("userIds", [])
             for u_id in user_ids_list:
                 # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
-                user_info = self.users.get(u_id, {}) if hasattr(self, 'users') else {}
-                user_name = user_info.get("name", "Desconocido")
+                user_info = self.network.users.get(u_id, {})
+                user_name = user_info.get("nickname") or user_info.get("name") or user_info.get("username") or "Desconocido"
                 lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
         else:
             members_list = self.mock.get_members(room_id)
@@ -850,35 +867,44 @@ class ChatClientGUI:
         if not room:
             return
 
-        if self.confirm_dialog("LEAVE ROOM", f"Are you sure you want to leave '{room['name']}'?"):
-            if self.network:
-                my_id = self.network.me.get("id")
-                my_name = self._resolve_username(my_id)
+        if not self.confirm_dialog(
+            "LEAVE ROOM",
+            f"Are you sure you want to leave '{room['name']}'?"
+        ):
+            return
 
-                # Persist system event in DB before removing the member.
+        if self.network:
+            my_id = self.network.me.get("id")
+            my_name = (
+                self.network.me.get("nickname")
+                or self.network.me.get("username")
+                or self.nickname
+            )
+
+            # Persistimos el evento como mensaje de sistema.
+            if hasattr(self.network, "send_system_message"):
                 self.network.send_system_message(
                     room_id,
-                    f"{my_name} has left the room."
+                    f"{my_name} left the room."
                 )
 
-                # Leave room = REMOVE_USER for current user.
-                self.network.remove_user_from_room(
-                    my_id,
-                    room_id
-                )
-            else:
-                self.mock.kick_user(room_id, self.username)
-                self.mock.messages.setdefault(room_id, []).append(
-                    ("__SYSTEM__", f"{self.nickname} has left the room.")
-                )
+            self.network.remove_user_from_room(
+                my_id,
+                room_id
+            )
 
             self.current_room = None
             self.refresh_sidebar()
             self.show_welcome_view()
+            return
 
-    # ─────────────────────────────────────────────
-    #  COORDINATOR PANEL
-    # ─────────────────────────────────────────────
+        self.mock.kick_user(room_id, self.username)
+        self.mock.messages.setdefault(room_id, []).append(
+            ("__SYSTEM__", f"{self.nickname} has left the room.")
+        )
+        self.current_room = None
+        self.refresh_sidebar()
+        self.show_welcome_view()
 
     def open_coordinator_panel(self, room_id):
         room = self._get_room(room_id)
@@ -959,12 +985,7 @@ class ChatClientGUI:
                     if self.network:
                         # Handbook: {"type":"ADD_USER","chatRoomId":X,"userId":Y}
                         self.network.add_user_to_room(target_id, room_id)
-
-                        # Persist the system notice in DB as userId=0.
-                        self.network.send_system_message(
-                            room_id,
-                            f"{target_name} joined the room."
-                        )
+                        # La respuesta llega vía on_user_added → refresh_sidebar
                     else:
                         r = self.mock.get_room(room_id)
                         if r and target_id not in r["members"]:
@@ -989,19 +1010,7 @@ class ChatClientGUI:
         req_frame = tk.Frame(inner, bg=self.BG_MAIN, bd=1, relief="solid")
         req_frame.pack(fill="x", padx=25, pady=5)
 
-        if self.network:
-            requests_list = [
-                {
-                    "userId": uid,
-                    "nickname": self.network.users.get(uid, {}).get(
-                        "nickname",
-                        self.network.users.get(uid, {}).get("name", f"User_{uid}")
-                    )
-                }
-                for uid in room.get("requestIds", [])
-            ]
-        else:
-            requests_list = self.mock.requests.get(room_id, [])
+        requests_list = [] if self.network else self.mock.requests.get(room_id, [])
 
         if not requests_list:
             tk.Label(req_frame, text="No hay solicitudes pendientes.", font=self.FONT_UI,
@@ -1017,13 +1026,9 @@ class ChatClientGUI:
                 tk.Label(r_item, text=f"• {r_name} (ID: {r_id})", font=self.FONT_UI,
                          bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
 
-                def accept_action(uid=r_id, req_name=r_name):
+                def accept_action(uid=r_id):
                     if self.network:
                         self.network.add_user_to_room(int(uid), room_id)
-                        self.network.send_system_message(
-                            room_id,
-                            f"{req_name} joined the room."
-                        )
                     else:
                         self.mock.accept_request(room_id, uid)
                     panel.destroy()
@@ -1082,12 +1087,6 @@ class ChatClientGUI:
                                           f"¿Expulsar a {target_name} de la sala?",
                                           parent=panel):
                         if self.network:
-                            # Persist system event in DB before removing the member.
-                            self.network.send_system_message(
-                                room_id,
-                                f"{target_name} was removed from the room."
-                            )
-
                             # Handbook: {"type":"REMOVE_USER","chatRoomId":X,"userId":Y}
                             self.network.remove_user_from_room(target_id, room_id)
                         else:
@@ -1202,23 +1201,38 @@ class ChatClientGUI:
 
     def on_new_message(self, room_id, msg_dict):
         """Llega cuando el servidor hace push de un mensaje nuevo."""
-        sender = self._resolve_username(msg_dict.get("userId"))
-        text   = msg_dict.get("text", "")
+        text = msg_dict.get("text", "")
+        is_system = msg_dict.get("userId") == 0
+
+        if is_system:
+            sender = "◆ System"
+        else:
+            sender = self._resolve_username(msg_dict.get("userId"))
+
         if room_id == self.current_room and self.chat_history:
             self.chat_history.config(state="normal")
-            self.chat_history.insert(tk.END, f"[{sender}] ", "user")
-            self.chat_history.insert(tk.END, f"{text}\n", "msg")
+
+            if is_system:
+                self.chat_history.insert(tk.END, f"◆ {text}\n", "system")
+            else:
+                self.chat_history.insert(tk.END, f"[{sender}] ", "user")
+                self.chat_history.insert(tk.END, f"{text}\n", "msg")
+
             self.chat_history.config(state="disabled")
             self.chat_history.yview(tk.END)
         else:
-            # Notificación en sidebar
             if self.network:
                 room = self.network.rooms.get(room_id)
                 if room:
                     room["notifications"] = room.get("notifications", 0) + 1
+
             self.refresh_sidebar()
-            room_name = (self.network.rooms.get(room_id, {}).get("name", str(room_id))
-                         if self.network else str(room_id))
+
+            room_name = (
+                self.network.rooms.get(room_id, {}).get("name", str(room_id))
+                if self.network else str(room_id)
+            )
+
             self.show_toast(room_id, room_name, sender, text)
 
     def on_room_created(self, room_dict):
@@ -1226,32 +1240,26 @@ class ChatClientGUI:
         self.refresh_sidebar()
 
     def on_user_added(self, room_id, user_dict):
-        """Llega cuando alguien es agregado a una sala."""
-        # Do not create local-only system messages here.
-        # Join/leave notices are now persisted as NEW_MESSAGE with userId=0.
+        """
+        Llega cuando alguien es agregado a una sala.
+        Ya no insertamos mensaje local aquí porque el evento se guarda
+        como MESSAGE con userId=0 y llega por on_new_message().
+        """
         self.refresh_sidebar()
-
-        if room_id == self.current_room:
-            self.show_chat_view(room_id)
 
     def on_user_removed(self, room_id, user_id):
-        """Llega cuando alguien es removido de una sala."""
+        """
+        Llega cuando alguien es removido de una sala.
+        Ya no insertamos mensaje local aquí porque el evento se guarda
+        como MESSAGE con userId=0 y llega por on_new_message().
+        """
         my_id = self.network.me.get("id") if self.network else None
 
-        if user_id == my_id:
-            if self.current_room == room_id:
-                self.current_room = None
-                self.show_welcome_view()
+        if user_id == my_id and self.current_room == room_id:
+            self.current_room = None
+            self.show_welcome_view()
 
-            self.refresh_sidebar()
-            return
-
-        # Do not create local-only system messages here.
-        # Join/leave notices are now persisted as NEW_MESSAGE with userId=0.
         self.refresh_sidebar()
-
-        if room_id == self.current_room:
-            self.show_chat_view(room_id)
 
     def on_message_deleted(self, room_id, message_id):
         """Llega cuando se elimina un mensaje (recarga historial si es la sala activa)."""
@@ -1352,32 +1360,13 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def request_join_from_view(self, room_id):
-        if self.network:
-            self.network.request_join_room(room_id)
-
-            self.pending_rooms.add(room_id)
-
-            self.info_dialog(
-                "REQUEST SENT",
-                "Your join request was sent to the room coordinator.",
-                color=self.ACCENT
-            )
-
-            self.show_private_room_view(room_id)
-            return
-
         success = self.mock.request_join(room_id)
-
         if success:
-
+            # AQUÍ IRÍA: self.network.send("LOBBY_JOIN_REQUEST", room_id)
             self.pending_rooms.add(room_id)
             self.show_private_room_view(room_id)
         else:
-            self.info_dialog(
-                "WARNING",
-                "Could not send join request.",
-                color=self.WARNING_COLOR
-            )
+            self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
 
     # ─────────────────────────────────────────────
     #  CHANNEL SELECT

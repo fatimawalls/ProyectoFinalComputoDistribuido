@@ -848,4 +848,14 @@
 		"userId":	18,
 		"chatRoomId":	21,
 		"text":	"hfhj"
+	}, {
+		"id":	172,
+		"userId":	0,
+		"chatRoomId":	25,
+		"text":	"Mafer joined the room."
+	}, {
+		"id":	173,
+		"userId":	2,
+		"chatRoomId":	25,
+		"text":	"Hola querida"
 	}]

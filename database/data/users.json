@@ -9,7 +9,7 @@
 		"username":	"soto",
 		"nickname":	"soto",
 		"password":	"soto",
-		"chatRoomsIds":	[3, 4, 5, 6, 16, 17, 21]
+		"chatRoomsIds":	[3, 4, 5, 6, 16, 17, 21, 25]
 	}, {
 		"id":	3,
 		"name":	"juan",
@@ -96,4 +96,11 @@
 		"nickname":	"valemas",
 		"password":	"123456",
 		"chatRoomsIds":	[21, 23, 24]
+	}, {
+		"id":	19,
+		"name":	"Mafer",
+		"username":	"Mafer",
+		"nickname":	"Querida",
+		"password":	"123456",
+		"chatRoomsIds":	[25]
 	}]

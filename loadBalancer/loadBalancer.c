@@ -64,11 +64,13 @@ typedef struct {
 
 /* ── CONFIGURACIÓN MIXTA: CON SERVIDORES INTERNOS (DOCKER) Y EXTERNOS (LAN) ── */
 static ServerEntry g_servers_template[] = {
+    /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
+
     /* 1. Tu servidor local dentro de Docker (Mapeo 5015:5006) */
     { "172.18.2.2", 5006, "127.0.0.1", 5015, 5001, 0, 1 },
+    { "172.18.2.4", 5006, "127.0.0.1", 5006, 5001, 0, 1 },
 
     /* 2. El servidor externo de tu compañero en la LAN (Misma IP e igual puerto) */
-    /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
     { "10.7.7.243", 5003,        "10.7.7.243", 5003,         5001,     0,   1 },
 };
 
@@ -148,16 +150,22 @@ static void* health_thread(void* arg)
     while (1) {
         sleep(10);
         pthread_mutex_lock(&g_state->lock);
+        // ... dentro de static void* health_thread(void* arg) ...
         for (int i = 0; i < g_state->count; i++) {
             ServerEntry* s = &g_state->servers[i];
             int prev = s->alive;
 
-            // CAMBIO: Usar parámetros internos (int_ip e int_port)
             s->alive = is_reachable(s->int_ip, s->int_port);
 
-            if (prev != s->alive)
-                LOG("[HEALTH] %s:%d → %s",
-                    s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
+            if (prev != s->alive) {
+                LOG("[HEALTH] %s:%d → %s", s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
+                
+                // ── NUEVA LÓGICA: Si se cayó, limpiamos sus conexiones ──
+                if (!s->alive) {
+                    s->connections = 0; 
+                    LOG("[HEALTH] Servidor caído. Reseteando conexiones a 0 para %s:%d", s->int_ip, s->int_port);
+                }
+            }
         }
         pthread_mutex_unlock(&g_state->lock);
     }

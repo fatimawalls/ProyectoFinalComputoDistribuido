@@ -166,4 +166,11 @@
 		"userIds":	[18],
 		"messageIds":	[135, 136, 137, 138, 139, 140, 141, 142],
 		"requestIds":	[2]
+	}, {
+		"id":	25,
+		"name":	"Esposos",
+		"coordinatorId":	2,
+		"userIds":	[2, 19],
+		"messageIds":	[172, 173],
+		"requestIds":	[]
 	}]

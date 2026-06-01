@@ -2,7 +2,7 @@
  * chatServerJson.c — Servidor de chat (proxy al database_server)
  
 
-gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServerJson
+gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/libhiredis.a -o chatServerJson
 
 
  *
@@ -31,8 +31,8 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServ
 #include <sys/mman.h>
 #include <ifaddrs.h>
 #include <errno.h>
-
 #include "cJSON.h"
+#include "hiredis/hiredis.h"
 
 /* ============================================================
    LOGGER
@@ -52,6 +52,8 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServ
 #define DB_PORT       8080
 #define MAX_USERS     64
 #define BUFSIZE       65536
+#define redisIP       "172.17.0.2"
+#define redisPORT     6379
 
 char g_db_host[256] = DB_HOST;
 int  g_db_port = DB_PORT;
@@ -249,6 +251,41 @@ static void udp_notify_user(int db_user_id, const char* json_str)
     pthread_mutex_unlock(&g_state->lock);
 }
 
+
+/* ============================================================
+   REDIS SUBSCRIBER — Escucha actualizaciones de otros servidores
+   ============================================================ */
+static void* redis_subscriber_thread(void* arg) {
+    // Conectar al Redis central (cambia la IP si Redis está en otro contenedor/máquina)
+    redisContext* sub = redisConnect(redisIP, redisPORT);
+    if (!sub || sub->err) {
+        LOG("[REDIS] Error al conectar el suscriptor: %s", sub ? sub->errstr : "OOM");
+        return NULL;
+    }
+
+    LOG("[REDIS] Suscriptor conectado exitosamente. Escuchando 'chat_updates'...");
+    redisCommand(sub, "SUBSCRIBE chat_updates");
+
+    redisReply* reply;
+    while (redisGetReply(sub, (void**)&reply) == REDIS_OK) {
+        // hiredis devuelve arrays para los mensajes de Pub/Sub
+        // reply->element[0] = "message"
+        // reply->element[1] = nombre del canal ("chat_updates")
+        // reply->element[2] = el contenido del mensaje (el JSON)
+        if (reply->type == REDIS_REPLY_ARRAY && reply->elements == 3) {
+            if (reply->element[2]->str) {
+                LOG("[REDIS] Mensaje recibido de otro server. Repartiendo localmente...");
+                // Usamos skip_uid = -1 para que le llegue a TODOS los locales
+                udp_broadcast_all(reply->element[2]->str, -1);
+            }
+        }
+        freeReplyObject(reply);
+    }
+
+    redisFree(sub);
+    return NULL;
+}
+
 /* ============================================================
    on_data_change()
    ============================================================ */
@@ -257,12 +294,12 @@ static void on_data_change(const char* resp_json, int sender_uid)
     cJSON* obj = cJSON_Parse(resp_json);
     if (!obj) return;
 
-    cJSON* jtype   = cJSON_GetObjectItem(obj, "type");
+    cJSON* jtype = cJSON_GetObjectItem(obj, "type");
     cJSON* jsuccess = cJSON_GetObjectItem(obj, "success");
 
     if (!cJSON_IsString(jtype)) { cJSON_Delete(obj); return; }
 
-    const char* type    = jtype->valuestring;
+    const char* type = jtype->valuestring;
     int         success = cJSON_IsNumber(jsuccess) ? jsuccess->valueint : 0;
 
     LOG("[ON_DATA_CHANGE] tipo=%s success=%d", type, success);
@@ -281,8 +318,25 @@ static void on_data_change(const char* resp_json, int sender_uid)
     if (strcmp(type, "REQUEST_RESPONSE") == 0)         broadcast = 1;
     if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;
 
-    if (broadcast)
+    if (broadcast) {
+        // 1. Notifica a los clientes locales de este servidor
         udp_broadcast_all(resp_json, sender_uid);
+
+        // 2. NUEVO: Publica a todo el ecosistema vía Redis
+
+        // 👇 AQUÍ ESTÁ LA CORRECCIÓN: Agregar "redisContext *pub = " 👇
+        redisContext* pub = redisConnect("192.168.68.118", 6379);
+
+        if (pub && !pub->err) {
+            redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", resp_json);
+            if (reply) freeReplyObject(reply);
+            redisFree(pub);
+        }
+        else {
+            LOG("[REDIS] Fallo al publicar el evento en Redis");
+            if (pub) redisFree(pub);
+        }
+    }
 
     cJSON_Delete(obj);
 }
@@ -723,6 +777,12 @@ int main(int argc, char* argv[])
     /* ============================================================
     LOOP PRINCIPAL DE CONEXIONES (en el main de chatServerJson.c
     ============================================================ */
+
+    // Iniciar el hilo de Redis en segundo plano
+    pthread_t t_redis;
+    pthread_create(&t_redis, NULL, redis_subscriber_thread, NULL);
+    pthread_detach(t_redis);
+
     while (1) {
         struct sockaddr_in ca;
         socklen_t clen = sizeof(ca);

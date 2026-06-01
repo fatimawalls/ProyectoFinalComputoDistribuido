@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <ifaddrs.h>
+#include <signal.h> // 1. NUEVO: Librería para manejar señales (evitar zombies)
 
 #include "request_handler.h"
 #include "login_register.h"
@@ -16,7 +17,7 @@ int main()
 {
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    if(serverSocket < 0)
+    if (serverSocket < 0)
     {
         perror("socket");
         return 1;
@@ -24,7 +25,7 @@ int main()
 
     int opt = 1;
 
-    if(setsockopt(
+    if (setsockopt(
         serverSocket,
         SOL_SOCKET,
         SO_REUSEADDR,
@@ -49,9 +50,9 @@ int main()
     */
     serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if(bind(
+    if (bind(
         serverSocket,
-        (struct sockaddr *)&serverAddr,
+        (struct sockaddr*)&serverAddr,
         sizeof(serverAddr)
     ) < 0)
     {
@@ -67,28 +68,25 @@ int main()
         return 1;
     }
 
-    // --- NUEVA SECCIÓN PARA AUTO-DETECTAR LA IP REAL ---
-    char realIP[64] = "0.0.0.0"; // IP por defecto si falla la búsqueda
+    // --- SECCIÓN PARA AUTO-DETECTAR LA IP REAL ---
+    char realIP[64] = "0.0.0.0";
     struct ifaddrs* interfaces = NULL;
     struct ifaddrs* temp_addr = NULL;
 
-    // Obtener la lista de interfaces de red
     if (getifaddrs(&interfaces) == 0) {
         temp_addr = interfaces;
         while (temp_addr != NULL) {
-            // Buscamos interfaces IPv4 (AF_INET)
             if (temp_addr->ifa_addr != NULL && temp_addr->ifa_addr->sa_family == AF_INET) {
                 char* ip = inet_ntoa(((struct sockaddr_in*)temp_addr->ifa_addr)->sin_addr);
 
-                // Ignoramos la interfaz local (127.0.0.1) para agarrar la de Docker (172.x.x.x)
                 if (strcmp(ip, "127.0.0.1") != 0) {
                     strcpy(realIP, ip);
-                    break; // Encontramos la IP, salimos del ciclo
+                    break;
                 }
             }
             temp_addr = temp_addr->ifa_next;
         }
-        freeifaddrs(interfaces); // Liberar memoria
+        freeifaddrs(interfaces);
     }
 
     printf("==================================================\n");
@@ -98,44 +96,69 @@ int main()
     printf("==================================================\n");
     fflush(stdout);
 
+    // 2. NUEVO: Prevenir que los procesos hijos se conviertan en "zombies" al terminar
+    signal(SIGCHLD, SIG_IGN);
 
-    while(1)
+    while (1)
     {
         int clientSocket = accept(serverSocket, NULL, NULL);
 
-        if(clientSocket < 0)
+        if (clientSocket < 0)
         {
             perror("accept");
             continue;
         }
 
-        printf("Client connected\n");
-        fflush(stdout);
+        // 3. NUEVO: Hacemos el fork para crear un proceso paralelo
+        pid_t pid = fork();
 
-        char buffer[8192];
-
-        int bytes = recv(
-            clientSocket,
-            buffer,
-            sizeof(buffer) - 1,
-            0
-        );
-
-        if(bytes <= 0)
-        {
-            perror("recv");
+        if (pid < 0) {
+            perror("Error en fork");
             close(clientSocket);
             continue;
         }
 
-        buffer[bytes] = '\0';
+        if (pid == 0) {
+            // =========================================================
+            // PROCESO HIJO: Atiende al cliente
+            // =========================================================
+            close(serverSocket); // El hijo no necesita escuchar conexiones nuevas
 
-        printf("REQUEST:\n%s\n", buffer);
-        fflush(stdout);
+            printf("[PID %d] Client connected\n", getpid());
+            fflush(stdout);
 
-        handleRequest(clientSocket, buffer);
+            char buffer[8192];
 
-        close(clientSocket);
+            int bytes = recv(
+                clientSocket,
+                buffer,
+                sizeof(buffer) - 1,
+                0
+            );
+
+            if (bytes <= 0)
+            {
+                perror("recv");
+                close(clientSocket);
+                exit(1); // IMPORTANTE: El hijo debe morir con exit(), no con continue o return
+            }
+
+            buffer[bytes] = '\0';
+
+            printf("[PID %d] REQUEST:\n%s\n", getpid(), buffer);
+            fflush(stdout);
+
+            handleRequest(clientSocket, buffer);
+
+            close(clientSocket);
+            exit(0); // IMPORTANTE: El hijo termina exitosamente aquí
+        }
+        else {
+            // =========================================================
+            // PROCESO PADRE: Cierra el socket del cliente y sigue iterando
+            // =========================================================
+            close(clientSocket); // El padre le deja el socket al hijo
+        }
     }
 
     close(serverSocket);

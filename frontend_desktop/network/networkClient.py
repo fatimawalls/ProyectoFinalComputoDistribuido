@@ -634,6 +634,25 @@ class NetworkClient:
         # This callback refreshes UI. System text is persisted separately as userId=0 message.
         if self.on_user_added:
             self.on_user_added(room_id, self.users.get(user_id, {"id": user_id}))
+    
+    def _on_add_user_response(self, obj: dict):
+        if not obj.get("success"):
+            return
+
+        room_id = obj.get("chatRoomId")
+        user_id = obj.get("userId")
+
+        # Agregamos al usuario a la lista de la sala en la memoria local
+        room = self.rooms.get(room_id)
+        if room and user_id and user_id not in room.get("userIds", []):
+            room.setdefault("userIds", []).append(user_id)
+
+        print(f"[RED] Usuario #{user_id} agregado a sala #{room_id}")
+
+        # Notificamos a la interfaz gráfica para que actualice la pantalla
+        if self.on_user_added:
+            self.on_user_added(room_id, self.users.get(user_id, {"id": user_id}))
+
 
     def _on_remove_user_response(self, obj: dict):
         if not obj.get("success"):

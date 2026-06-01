@@ -1352,13 +1352,32 @@ class ChatClientGUI:
     # ─────────────────────────────────────────────
 
     def request_join_from_view(self, room_id):
+        if self.network:
+            self.network.request_join_room(room_id)
+
+            self.pending_rooms.add(room_id)
+
+            self.info_dialog(
+                "REQUEST SENT",
+                "Your join request was sent to the room coordinator.",
+                color=self.ACCENT
+            )
+
+            self.show_private_room_view(room_id)
+            return
+
         success = self.mock.request_join(room_id)
+
         if success:
-            # AQUÍ IRÍA: self.network.send("LOBBY_JOIN_REQUEST", room_id)
+
             self.pending_rooms.add(room_id)
             self.show_private_room_view(room_id)
         else:
-            self.info_dialog("WARNING", "Could not send join request.", color=self.WARNING_COLOR)
+            self.info_dialog(
+                "WARNING",
+                "Could not send join request.",
+                color=self.WARNING_COLOR
+            )
 
     # ─────────────────────────────────────────────
     #  CHANNEL SELECT

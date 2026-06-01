@@ -1,6 +1,6 @@
 ﻿/*
  * chatServerJson.c — Servidor de chat (proxy al database_server)
- 
+
 
 gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/libhiredis.a -o chatServerJson
 
@@ -34,25 +34,26 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/lib
 #include "cJSON.h"
 #include "hiredis/hiredis.h"
 
-/* ============================================================
-   LOGGER
-   ============================================================ */
+ /* ============================================================
+    LOGGER
+    ============================================================ */
 #define LOG(fmt, ...)                    \
     do {                                 \
         printf(fmt "\n", ##__VA_ARGS__); \
         fflush(stdout);                  \
     } while (0)
 
-/* ============================================================
-   CONSTANTES
-   ============================================================ */
-#define TCP_PORT      5006
+    /* ============================================================
+       CONSTANTES
+       ============================================================ */
+#define TCP_PORT      5000
 #define UDP_PORT      5001
 #define DB_HOST       "172.18.2.3"
 #define DB_PORT       8080
 #define MAX_USERS     64
 #define BUFSIZE       65536
-#define redisIP       "172.17.0.2"
+
+#define redisIP       "10.7.2.119"
 #define redisPORT     6379
 
 char g_db_host[256] = DB_HOST;
@@ -74,12 +75,40 @@ int  g_lb_udp_port = 4001;
    ============================================================ */
 static void report_load_balancer(const char* event)
 {
-    if (g_lb_host[0] == '\0')
+    /* FIX 1: Log explícito cuando LB no está configurado.
+       Si ves este mensaje, arranca el servidor con:
+         ./chatServerJson <db_ip> <db_port> <lb_ip> <lb_udp_port> */
+    if (g_lb_host[0] == '\0') {
+        LOG("[LB-REPORT] SKIP — lb_host no configurado (pasa lb_ip como arg 3)");
         return;
+    }
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0)
+    if (fd < 0) {
+        LOG("[LB-REPORT] ERROR — no se pudo crear socket UDP: %s", strerror(errno));
         return;
+    }
+
+    /* FIX 2: Bindear el socket a la IP real del servidor con el udp_port conocido.
+       Sin este bind, el OS elige un puerto efímero aleatorio como IP origen,
+       y el Load Balancer no puede hacer coincidir el paquete con ningún servidor
+       registrado (compara src_ip:udp_port contra int_ip:udp_port en su tabla).
+       Al forzar el bind con UDP_PORT, el LB recibe exactamente el puerto que
+       tiene configurado en udp_port del ServerEntry. */
+    struct sockaddr_in local;
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = INADDR_ANY;  /* el OS pone la IP real de salida */
+    local.sin_port = htons(UDP_PORT);
+
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    if (bind(fd, (struct sockaddr*)&local, sizeof(local)) < 0) {
+        LOG("[LB-REPORT] WARN — bind a UDP_PORT %d fallo (%s), usando efimero",
+            UDP_PORT, strerror(errno));
+        /* No es fatal — el LB tiene el fallback por puerto, pero logueamos */
+    }
 
     struct sockaddr_in lb;
     memset(&lb, 0, sizeof(lb));
@@ -87,6 +116,7 @@ static void report_load_balancer(const char* event)
     lb.sin_port = htons(g_lb_udp_port);
 
     if (inet_aton(g_lb_host, &lb.sin_addr) == 0) {
+        LOG("[LB-REPORT] ERROR — IP del LB invalida: '%s'", g_lb_host);
         close(fd);
         return;
     }
@@ -100,7 +130,7 @@ static void report_load_balancer(const char* event)
         UDP_PORT
     );
 
-    sendto(
+    int sent = sendto(
         fd,
         payload,
         strlen(payload),
@@ -109,12 +139,11 @@ static void report_load_balancer(const char* event)
         sizeof(lb)
     );
 
-    LOG("[LB-REPORT] %s → %s:%d payload=%s",
-        event,
-        g_lb_host,
-        g_lb_udp_port,
-        payload
-    );
+    if (sent < 0)
+        LOG("[LB-REPORT] ERROR — sendto fallo: %s", strerror(errno));
+    else
+        LOG("[LB-REPORT] OK — event=%s → %s:%d payload=%s",
+            event, g_lb_host, g_lb_udp_port, payload);
 
     close(fd);
 }
@@ -193,11 +222,11 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     {
         struct sockaddr_in bcast;
         memset(&bcast, 0, sizeof(bcast));
-        bcast.sin_family      = AF_INET;
-        bcast.sin_port        = htons(UDP_PORT);
+        bcast.sin_family = AF_INET;
+        bcast.sin_port = htons(UDP_PORT);
         bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
         sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-               (struct sockaddr*)&bcast, sizeof(bcast));
+            (struct sockaddr*)&bcast, sizeof(bcast));
         LOG("[UDP-BROADCAST] ✅ %d bytes → 255.255.255.255:%d  tipo=%s",
             len, UDP_PORT, json_str);
     }
@@ -222,10 +251,10 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
-        dest.sin_port   = htons(active[i].udp_port);
+        dest.sin_port = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
         int r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-                       (struct sockaddr*)&dest, sizeof(dest));
+            (struct sockaddr*)&dest, sizeof(dest));
         LOG("[UDP-UNICAST] ✅ %d bytes → uid=%d %s:%d",
             r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
@@ -325,7 +354,7 @@ static void on_data_change(const char* resp_json, int sender_uid)
         // 2. NUEVO: Publica a todo el ecosistema vía Redis
 
         // 👇 AQUÍ ESTÁ LA CORRECCIÓN: Agregar "redisContext *pub = " 👇
-        redisContext* pub = redisConnect("192.168.68.118", 6379);
+        redisContext* pub = redisConnect(redisIP, redisPORT);
 
         if (pub && !pub->err) {
             redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", resp_json);
@@ -425,7 +454,7 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
             strncpy(g_state->users[i].udp_ip, ip,
-                    sizeof(g_state->users[i].udp_ip) - 1);
+                sizeof(g_state->users[i].udp_ip) - 1);
             g_state->users[i].udp_port = port;
             LOG("[SHM] Reconexión uid=%d ip=%s port=%d", uid, ip, port);
             pthread_mutex_unlock(&g_state->lock);
@@ -438,10 +467,10 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
             ShmUser* su = &g_state->users[i];
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
-            su->active     = 1;
-            su->udp_port   = port;
+            su->active = 1;
+            su->udp_port = port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip,   ip,    sizeof(su->udp_ip)   - 1);
+            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
             g_state->user_count++;
             LOG("[SHM] Registrado uid=%d username=%s ip=%s port=%d slot=%d",
                 uid, uname, ip, port, i);
@@ -471,9 +500,9 @@ static void shm_unregister_user(int uid)
    Si no vienen en el JSON, usa client_ip y UDP_PORT como fallback.
    ============================================================ */
 static void extract_udp_info(cJSON* req, const char* client_ip,
-                              char* out_ip, int ip_size, int* out_port)
+    char* out_ip, int ip_size, int* out_port)
 {
-    cJSON* judp_ip   = cJSON_GetObjectItem(req, "udpIp");
+    cJSON* judp_ip = cJSON_GetObjectItem(req, "udpIp");
     cJSON* judp_port = cJSON_GetObjectItem(req, "udpPort");
 
     /* IP: usar la que el cliente reportó si viene y no es vacía */
@@ -540,7 +569,7 @@ static void atender_cliente(int sock, const char* client_ip)
                             if (ju) uid = ju->valueint;
                             if (jn && jn->valuestring)
                                 strncpy(username, jn->valuestring,
-                                        sizeof(username) - 1);
+                                    sizeof(username) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -550,7 +579,7 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");
@@ -596,7 +625,7 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");
@@ -770,8 +799,15 @@ int main(int argc, char* argv[])
     LOG(" Puerto TCP       : %d", TCP_PORT);
     LOG(" Puerto UDP       : %d  (onDataChange broadcast)", UDP_PORT);
     LOG(" Database         : %s:%d", g_db_host, g_db_port);
-    LOG(" udpIp/udpPort    : leídos del JSON de AUTH/CREATE_ACCOUNT");
-    LOG(" LB reporting      : %s", g_lb_host[0] ? "ON" : "OFF");
+    LOG(" udpIp/udpPort    : leidos del JSON de AUTH/CREATE_ACCOUNT");
+    LOG(" LB reporting     : %s", g_lb_host[0] ? "ON" : "OFF");
+    if (g_lb_host[0] != '\0')
+        LOG(" LB destino       : %s:%d", g_lb_host, g_lb_udp_port);
+    LOG("--------------------------------------------------");
+    LOG(" CONFIGURA en loadBalancer.c g_servers_template:");
+    LOG("   int_ip  = \"%s\"", realIP);
+    LOG("   int_port= %d  (TCP)", TCP_PORT);
+    LOG("   udp_port= %d  (debe coincidir con UDP_PORT)", UDP_PORT);
     LOG("==================================================");
 
     /* ============================================================

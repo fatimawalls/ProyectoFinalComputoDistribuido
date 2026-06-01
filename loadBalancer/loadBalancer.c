@@ -1,9 +1,9 @@
 /*
  * loadBalancer.c — Load Balancer (Smart Redirect + Least Connections)
  *
-  
+
 gcc loadBalancer.c cJSON.c -o loadbalancer -lpthread
- 
+
 
  * Arquitectura:
  *   Cliente ──TCP:LB_PORT──> LB ──JSON──> {"ip":"...","port":...}
@@ -67,11 +67,8 @@ static ServerEntry g_servers_template[] = {
     /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
 
     /* 1. Tu servidor local dentro de Docker (Mapeo 5015:5006) */
-    { "172.18.2.2", 5006, "127.0.0.1", 5015, 5001, 0, 1 },
-    { "172.18.2.4", 5006, "127.0.0.1", 5006, 5001, 0, 1 },
-
-    /* 2. El servidor externo de tu compañero en la LAN (Misma IP e igual puerto) */
-    { "10.7.7.243", 5003,        "10.7.7.243", 5003,         5001,     0,   1 },
+    { "10.7.6.242", 5003, "10.7.6.242", 5003, 5001, 0, 1 },
+    { "10.7.1.30", 5006, "10.7.1.30", 5006, 5001, 0, 1 }
 };
 
 #define SERVER_COUNT (int)(sizeof(g_servers_template) / sizeof(g_servers_template[0]))
@@ -99,14 +96,26 @@ static int pick_server(void)
     int best_idx = -1;
     int best_conn = INT_MAX;
 
+    LOG("[PICK] Evaluando servidores para seleccion:");
     for (int i = 0; i < g_state->count; i++) {
         ServerEntry* s = &g_state->servers[i];
+        LOG("[PICK]   [%d] %s:%d alive=%d connections=%d",
+            i, s->ext_ip, s->ext_port, s->alive, s->connections);
         if (!s->alive) continue;
         if (s->connections < best_conn) {
             best_conn = s->connections;
             best_idx = i;
         }
     }
+
+    if (best_idx >= 0)
+        LOG("[PICK] -> Elegido server[%d] %s:%d con %d conexiones",
+            best_idx,
+            g_state->servers[best_idx].ext_ip,
+            g_state->servers[best_idx].ext_port,
+            best_conn);
+    else
+        LOG("[PICK] -> Ningun server disponible");
 
     pthread_mutex_unlock(&g_state->lock);
     return best_idx;
@@ -150,7 +159,8 @@ static void* health_thread(void* arg)
     while (1) {
         sleep(10);
         pthread_mutex_lock(&g_state->lock);
-        // ... dentro de static void* health_thread(void* arg) ...
+
+        LOG("[HEALTH] === Estado actual de servidores ===");
         for (int i = 0; i < g_state->count; i++) {
             ServerEntry* s = &g_state->servers[i];
             int prev = s->alive;
@@ -158,15 +168,17 @@ static void* health_thread(void* arg)
             s->alive = is_reachable(s->int_ip, s->int_port);
 
             if (prev != s->alive) {
-                LOG("[HEALTH] %s:%d → %s", s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
-                
-                // ── NUEVA LÓGICA: Si se cayó, limpiamos sus conexiones ──
+                LOG("[HEALTH] %s:%d -> %s", s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
+
                 if (!s->alive) {
-                    s->connections = 0; 
-                    LOG("[HEALTH] Servidor caído. Reseteando conexiones a 0 para %s:%d", s->int_ip, s->int_port);
+                    s->connections = 0;
+                    LOG("[HEALTH] Servidor caido. Reseteando conexiones a 0 para %s:%d", s->int_ip, s->int_port);
                 }
             }
+            LOG("[HEALTH]   [%d] %s:%d alive=%d connections=%d",
+                i, s->int_ip, s->int_port, s->alive, s->connections);
         }
+        LOG("[HEALTH] =====================================");
         pthread_mutex_unlock(&g_state->lock);
     }
     return NULL;
@@ -207,26 +219,61 @@ static void* udp_thread(void* arg)
         char        src_ip[64];
         inet_ntop(AF_INET, &src.sin_addr, src_ip, sizeof(src_ip));
 
+        LOG("[UDP-RAW] Paquete recibido de IP=%s payload='%s'", src_ip, buf);
+        LOG("[UDP-RAW] event='%s' port=%d", event, int_port);
+
         pthread_mutex_lock(&g_state->lock);
+
+        /* Debug: mostrar tabla de servers conocidos */
+        LOG("[UDP-MATCH] Buscando server... (total=%d)", g_state->count);
+        for (int i = 0; i < g_state->count; i++) {
+            ServerEntry* s = &g_state->servers[i];
+            LOG("[UDP-MATCH]   [%d] int_ip=%s udp_port=%d alive=%d conn=%d",
+                i, s->int_ip, s->udp_port, s->alive, s->connections);
+        }
+
+        int matched = 0;
         for (int i = 0; i < g_state->count; i++) {
             ServerEntry* s = &g_state->servers[i];
 
-            /* CAMBIO: Comparar contra int_ip y udp_port */
-            if (strcmp(s->int_ip, src_ip) != 0 || s->udp_port != int_port)
-                continue;
+            /* Intento 1: coincidencia exacta IP + puerto */
+            int ip_match = (strcmp(s->int_ip, src_ip) == 0);
+            int port_match = (s->udp_port == int_port);
 
+            LOG("[UDP-MATCH]   [%d] ip_match=%d port_match=%d (src=%s:%d vs reg=%s:%d)",
+                i, ip_match, port_match, src_ip, int_port, s->int_ip, s->udp_port);
+
+            /* Intento 2: si la IP no coincide, acepta sólo por puerto
+               (útil cuando Docker NAT cambia la IP origen) */
+            if (!ip_match && port_match) {
+                LOG("[UDP-FALLBACK] IP no coincide (%s vs %s) pero puerto sí (%d). Aceptando por puerto.",
+                    src_ip, s->int_ip, int_port);
+            }
+
+            if (!port_match)
+                continue;   /* puerto distinto → definitivamente no es éste */
+
+            if (!ip_match)
+                LOG("[UDP-WARN] Usando fallback por puerto — verifica int_ip del server [%d]", i);
+
+            matched = 1;
             if (strcmp(event, "connect") == 0) {
                 s->connections++;
-                LOG("[UDP] connect  %s:%d → conexiones=%d",
-                    src_ip, int_port, s->connections);
+                LOG("[UDP] connect  %s:%d → server[%d] conexiones=%d",
+                    src_ip, int_port, i, s->connections);
             }
             else if (strcmp(event, "disconnect") == 0) {
                 if (s->connections > 0) s->connections--;
-                LOG("[UDP] disconnect %s:%d → conexiones=%d",
-                    src_ip, int_port, s->connections);
+                LOG("[UDP] disconnect %s:%d → server[%d] conexiones=%d",
+                    src_ip, int_port, i, s->connections);
             }
             break;
         }
+
+        if (!matched)
+            LOG("[UDP-WARN] Paquete de %s:%d NO coincide con ningún server registrado — revisa int_ip/udp_port",
+                src_ip, int_port);
+
         pthread_mutex_unlock(&g_state->lock);
         cJSON_Delete(obj);
     }

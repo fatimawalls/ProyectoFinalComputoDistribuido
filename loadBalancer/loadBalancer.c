@@ -43,7 +43,7 @@ gcc loadBalancer.c cJSON.c -o loadbalancer -lpthread
        — LB_UDP_PORT : puerto donde escucha reportes de ChatServers
        ============================================================ */
 #define LB_TCP_PORT   4000   /* ← CAMBIAR si necesitas otro puerto TCP  */
-#define LB_UDP_PORT   4001   /* ← CAMBIAR si necesitas otro puerto UDP  */
+#define LB_UDP_PORT   4005   /* ← CAMBIAR si necesitas otro puerto UDP  */
 
        /* ============================================================
           LISTA DE CHAT SERVERS — HARDCODED

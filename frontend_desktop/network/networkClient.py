@@ -529,7 +529,40 @@ class NetworkClient:
     # ═══════════════════════════════════════════════════════════════
     # HANDLERS — EVENTOS EN TIEMPO REAL
     # ═══════════════════════════════════════════════════════════════
+    def _on_delete_request_response(self, obj: dict):
+        if not obj.get("success"):
+            print("[RED] DELETE_REQUEST_RESPONSE falló")
+            return
 
+        room_id = obj.get("chatRoomId")
+        user_id = obj.get("userId")
+
+        cr = obj.get("chatRoom")
+
+        if cr:
+            room_id = cr.get("id", room_id)
+
+            self.rooms[room_id] = {
+                "id": cr.get("id"),
+                "name": cr.get("name", ""),
+                "coordinatorId": cr.get("coordinatorId"),
+                "userIds": list(cr.get("userIds", [])),
+                "messageIds": list(cr.get("messageIds", [])),
+                "requestIds": list(cr.get("requestIds", [])),
+            }
+        else:
+            room = self.rooms.get(room_id)
+
+            if room and user_id in room.get("requestIds", []):
+                room["requestIds"].remove(user_id)
+
+        print(f"[RED] Request de usuario #{user_id} eliminado de sala #{room_id}")
+
+        if self.on_user_added:
+            self.on_user_added(
+                room_id,
+                self.users.get(user_id, {"id": user_id})
+            )
     def _on_user_online(self, obj: dict):
         """
         Llega como un evento push dinámico cuando un usuario inicia sesión 

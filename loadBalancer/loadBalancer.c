@@ -42,8 +42,8 @@ gcc loadBalancer.c cJSON.c -o loadbalancer -lpthread
        — LB_TCP_PORT : puerto donde escucha clientes (exterior del container)
        — LB_UDP_PORT : puerto donde escucha reportes de ChatServers
        ============================================================ */
-#define LB_TCP_PORT   4000   /* ← CAMBIAR si necesitas otro puerto TCP  */
-#define LB_UDP_PORT   4005   /* ← CAMBIAR si necesitas otro puerto UDP  */
+#define LB_TCP_PORT   6000   /* ← CAMBIAR si necesitas otro puerto TCP  */
+#define LB_UDP_PORT   6005   /* ← CAMBIAR si necesitas otro puerto UDP  */
 
        /* ============================================================
           LISTA DE CHAT SERVERS — HARDCODED
@@ -67,8 +67,8 @@ static ServerEntry g_servers_template[] = {
     /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
 
     /* 1. Tu servidor local dentro de Docker (Mapeo 5015:5006) */
-    { "10.7.6.242", 5003, "10.7.6.242", 5003, 5001, 0, 1 },
-    { "10.7.1.30", 5006, "10.7.1.30", 5006, 5001, 0, 1 }
+    { "10.7.6.242", 5003, "10.7.6.242", 5003, 5001, 0, 0 },
+    { "10.7.1.30", 5006, "10.7.1.30", 5006, 5001, 0, 0 }
 };
 
 #define SERVER_COUNT (int)(sizeof(g_servers_template) / sizeof(g_servers_template[0]))
@@ -157,7 +157,7 @@ static void* health_thread(void* arg)
 {
     (void)arg;
     while (1) {
-        sleep(10);
+        sleep(5);
         pthread_mutex_lock(&g_state->lock);
 
         LOG("[HEALTH] === Estado actual de servidores ===");

@@ -1,6 +1,6 @@
 ﻿/*
  * chatServerJson.c — Servidor de chat (proxy al database_server)
- 
+
 
 gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/libhiredis.a -o chatServerJson
 
@@ -34,18 +34,18 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/lib
 #include "cJSON.h"
 #include "hiredis/hiredis.h"
 
-/* ============================================================
-   LOGGER
-   ============================================================ */
+ /* ============================================================
+    LOGGER
+    ============================================================ */
 #define LOG(fmt, ...)                    \
     do {                                 \
-        printf(fmt "\n", ##__VA_ARGS__); \
+        printf(fmt "\n", ##_VA_ARGS_); \
         fflush(stdout);                  \
     } while (0)
 
-/* ============================================================
-   CONSTANTES
-   ============================================================ */
+    /* ============================================================
+       CONSTANTES
+       ============================================================ */
 #define TCP_PORT      5000
 #define UDP_PORT      5001
 #define DB_HOST       "172.18.2.3"
@@ -198,11 +198,11 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     {
         struct sockaddr_in bcast;
         memset(&bcast, 0, sizeof(bcast));
-        bcast.sin_family      = AF_INET;
-        bcast.sin_port        = htons(UDP_PORT);
+        bcast.sin_family = AF_INET;
+        bcast.sin_port = htons(UDP_PORT);
         bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
         sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-               (struct sockaddr*)&bcast, sizeof(bcast));
+            (struct sockaddr*)&bcast, sizeof(bcast));
         LOG("[UDP-BROADCAST] ✅ %d bytes → 255.255.255.255:%d  tipo=%s",
             len, UDP_PORT, json_str);
     }
@@ -227,10 +227,10 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
-        dest.sin_port   = htons(active[i].udp_port);
+        dest.sin_port = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
         int r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-                       (struct sockaddr*)&dest, sizeof(dest));
+            (struct sockaddr*)&dest, sizeof(dest));
         LOG("[UDP-UNICAST] ✅ %d bytes → uid=%d %s:%d",
             r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
@@ -430,7 +430,7 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
             strncpy(g_state->users[i].udp_ip, ip,
-                    sizeof(g_state->users[i].udp_ip) - 1);
+                sizeof(g_state->users[i].udp_ip) - 1);
             g_state->users[i].udp_port = port;
             LOG("[SHM] Reconexión uid=%d ip=%s port=%d", uid, ip, port);
             pthread_mutex_unlock(&g_state->lock);
@@ -443,10 +443,10 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
             ShmUser* su = &g_state->users[i];
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
-            su->active     = 1;
-            su->udp_port   = port;
+            su->active = 1;
+            su->udp_port = port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip,   ip,    sizeof(su->udp_ip)   - 1);
+            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
             g_state->user_count++;
             LOG("[SHM] Registrado uid=%d username=%s ip=%s port=%d slot=%d",
                 uid, uname, ip, port, i);
@@ -476,9 +476,9 @@ static void shm_unregister_user(int uid)
    Si no vienen en el JSON, usa client_ip y UDP_PORT como fallback.
    ============================================================ */
 static void extract_udp_info(cJSON* req, const char* client_ip,
-                              char* out_ip, int ip_size, int* out_port)
+    char* out_ip, int ip_size, int* out_port)
 {
-    cJSON* judp_ip   = cJSON_GetObjectItem(req, "udpIp");
+    cJSON* judp_ip = cJSON_GetObjectItem(req, "udpIp");
     cJSON* judp_port = cJSON_GetObjectItem(req, "udpPort");
 
     /* IP: usar la que el cliente reportó si viene y no es vacía */
@@ -545,7 +545,7 @@ static void atender_cliente(int sock, const char* client_ip)
                             if (ju) uid = ju->valueint;
                             if (jn && jn->valuestring)
                                 strncpy(username, jn->valuestring,
-                                        sizeof(username) - 1);
+                                    sizeof(username) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -555,7 +555,7 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");
@@ -601,7 +601,7 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");

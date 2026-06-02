@@ -254,6 +254,9 @@ static void udp_notify_user(int db_user_id, const char* json_str)
 }
 
 
+/* forward declaration — definida después del subscriber thread */
+static int redis_is_user_online(int uid);
+
 /* ============================================================
    FORWARD CHAT_USER — reenvía una línea al cliente inyectando
    el campo "online" si es un mensaje CHAT_USER.
@@ -270,6 +273,7 @@ static void forward_db_line(int sock, const char* line)
         int is_online = 0;
         if (cJSON_IsNumber(jid)) {
             int uid = jid->valueint;
+            /* Primero SHM local (rápido), luego Redis para usuarios en otros servers */
             pthread_mutex_lock(&g_state->lock);
             for (int i = 0; i < MAX_USERS; i++) {
                 if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
@@ -278,6 +282,8 @@ static void forward_db_line(int sock, const char* line)
                 }
             }
             pthread_mutex_unlock(&g_state->lock);
+            if (!is_online)
+                is_online = redis_is_user_online(uid);
         }
         cJSON_AddBoolToObject(j, "online", is_online);
         char* out = cJSON_PrintUnformatted(j);
@@ -289,6 +295,55 @@ static void forward_db_line(int sock, const char* line)
 
     cJSON_Delete(j);
     send_line(sock, line);
+}
+
+/* ============================================================
+   REDIS — gestión de usuarios online (cross-server)
+   ============================================================ */
+static void redis_user_online(int uid, const char* username, const char* nickname)
+{
+    redisContext* r = redisConnect(redisIP, redisPORT);
+    if (!r || r->err) {
+        LOG("[REDIS] Error marcando online uid=%d: %s", uid, r ? r->errstr : "OOM");
+        if (r) redisFree(r);
+        return;
+    }
+    redisReply* rep;
+    rep = redisCommand(r, "SADD online_user_ids %d", uid);
+    if (rep) freeReplyObject(rep);
+    rep = redisCommand(r, "HSET online_users:%d username %s nickname %s",
+                       uid, username, nickname[0] ? nickname : username);
+    if (rep) freeReplyObject(rep);
+    redisFree(r);
+    LOG("[REDIS] uid=%d (%s) online en Redis", uid, username);
+}
+
+static void redis_user_offline(int uid)
+{
+    redisContext* r = redisConnect(redisIP, redisPORT);
+    if (!r || r->err) {
+        LOG("[REDIS] Error marcando offline uid=%d: %s", uid, r ? r->errstr : "OOM");
+        if (r) redisFree(r);
+        return;
+    }
+    redisReply* rep;
+    rep = redisCommand(r, "SREM online_user_ids %d", uid);
+    if (rep) freeReplyObject(rep);
+    rep = redisCommand(r, "DEL online_users:%d", uid);
+    if (rep) freeReplyObject(rep);
+    redisFree(r);
+    LOG("[REDIS] uid=%d offline en Redis", uid);
+}
+
+static int redis_is_user_online(int uid)
+{
+    redisContext* r = redisConnect(redisIP, redisPORT);
+    if (!r || r->err) { if (r) redisFree(r); return 0; }
+    redisReply* rep = redisCommand(r, "SISMEMBER online_user_ids %d", uid);
+    int online = (rep && rep->type == REDIS_REPLY_INTEGER && rep->integer == 1);
+    if (rep) freeReplyObject(rep);
+    redisFree(r);
+    return online;
 }
 
 /* ============================================================
@@ -390,6 +445,9 @@ static void broadcast_user_online(int user_id, const char* username, const char*
         "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
         user_id, username, nickname[0] ? nickname : username);
 
+    /* Registrar en Redis para que otros servidores lo vean */
+    redis_user_online(user_id, username, nickname);
+
     /* Unicast a cada cliente registrado + broadcast fallback */
     udp_broadcast_all(buf, user_id);
 
@@ -417,6 +475,9 @@ static void broadcast_user_offline(int user_id, const char* username, const char
         "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
         user_id, username, nickname[0] ? nickname : username);
 
+    /* Limpiar de Redis antes de notificar para que otros servers ya lo vean offline */
+    redis_user_offline(user_id);
+
     udp_broadcast_all(buf, user_id);
 
     redisContext* pub = redisConnect(redisIP, redisPORT);
@@ -432,30 +493,50 @@ static void broadcast_user_offline(int user_id, const char* username, const char
     LOG("[UDP BROADCAST USER_OFFLINE] uid=%d username=%s", user_id, username);
 }
 
-/* Envía USER_ONLINE por TCP al cliente recién conectado, uno por cada usuario activo.
-   Se usa el mismo socket TCP para garantizar orden: llegan justo después de SYNC_END. */
+/* Envía USER_ONLINE por TCP al cliente recién conectado, uno por cada usuario activo
+   en TODOS los servidores (consultando Redis). */
 static void notify_existing_online_users(int sock, int skip_uid)
 {
-    pthread_mutex_lock(&g_state->lock);
-    ShmUser active[MAX_USERS];
-    int count = 0;
-    for (int i = 0; i < MAX_USERS; i++) {
-        ShmUser* u = &g_state->users[i];
-        if (u->active && u->db_user_id != skip_uid)
-            active[count++] = *u;
+    redisContext* r = redisConnect(redisIP, redisPORT);
+    if (!r || r->err) {
+        LOG("[REDIS] No se pudo obtener usuarios online globales: %s", r ? r->errstr : "OOM");
+        if (r) redisFree(r);
+        return;
     }
-    pthread_mutex_unlock(&g_state->lock);
 
-    for (int i = 0; i < count; i++) {
-        const char* nick = active[i].nickname[0] ? active[i].nickname : active[i].username;
+    redisReply* members = redisCommand(r, "SMEMBERS online_user_ids");
+    if (!members) { redisFree(r); return; }
+
+    for (size_t i = 0; i < members->elements; i++) {
+        int uid = atoi(members->element[i]->str);
+        if (uid == skip_uid) continue;
+
+        redisReply* info = redisCommand(r, "HGETALL online_users:%d", uid);
+        if (!info) continue;
+
+        char uname[64] = "";
+        char nick[64]  = "";
+        for (size_t j = 0; j + 1 < info->elements; j += 2) {
+            if (strcmp(info->element[j]->str, "username") == 0)
+                strncpy(uname, info->element[j+1]->str, sizeof(uname)-1);
+            else if (strcmp(info->element[j]->str, "nickname") == 0)
+                strncpy(nick,  info->element[j+1]->str, sizeof(nick)-1);
+        }
+        freeReplyObject(info);
+
+        if (!uname[0]) continue;
+        const char* display = nick[0] ? nick : uname;
         char buf[512];
         snprintf(buf, sizeof(buf),
             "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
-            active[i].db_user_id, active[i].username, nick);
+            uid, uname, display);
         send_line(sock, buf);
-        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s (%s) -> nuevo cliente (sock=%d)",
-            active[i].db_user_id, active[i].username, nick, sock);
+        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s (%s) -> sock=%d [Redis]",
+            uid, uname, display, sock);
     }
+
+    freeReplyObject(members);
+    redisFree(r);
 }
 
 /* ============================================================

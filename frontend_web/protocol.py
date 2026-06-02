@@ -239,8 +239,18 @@ class ProtocolDispatcher:
         self._messages.pop(sid, None)
 
     def _username(self, sid: str, user_id) -> str:
-        """Resuelve un userId a username; fallback al string del ID."""
-        return self._users.get(sid, {}).get(user_id, str(user_id))
+        """Devuelve el nickname del usuario para mostrar en el chat."""
+        entry = self._users.get(sid, {}).get(user_id)
+        if isinstance(entry, dict):
+            return entry.get("nickname") or entry.get("username") or str(user_id)
+        return entry or str(user_id)
+
+    def _get_plain_username(self, sid: str, user_id) -> str:
+        """Devuelve el username plano para checks de membresía."""
+        entry = self._users.get(sid, {}).get(user_id)
+        if isinstance(entry, dict):
+            return entry.get("username") or str(user_id)
+        return entry or str(user_id)
 
     # ── dispatch ─────────────────────────────────────────────────────
 
@@ -273,14 +283,14 @@ class ProtocolDispatcher:
             nickname = descifrar_texto(p.get("nickname") or p.get("username", ""))
             self._user_ids[sid] = user_id
             self._rooms[sid]    = {}
-            self._users[sid]    = {user_id: username}
+            self._users[sid]    = {user_id: {"username": username, "nickname": nickname}}
             self._messages[sid] = {}
             self._sync[sid]     = {
                 "rooms":    {},
-                "users":    {user_id: username},
+                "users":    {user_id: {"username": username, "nickname": nickname}},
                 "messages": {},
             }
-            print(f"[dispatcher] LOGIN OK → userId={user_id} username={username}")
+            print(f"[dispatcher] LOGIN OK → userId={user_id} username={username} nickname={nickname}")
             self.sio.emit("login_success",
                           {"username": username, "nickname": nickname,
                            "userId": user_id}, to=sid)
@@ -294,10 +304,10 @@ class ProtocolDispatcher:
             user_id  = p.get("userId", 0)
             username = descifrar_texto(p.get("username", ""))
             self._user_ids[sid] = user_id
-            self._users[sid]    = {user_id: username}
+            self._users[sid]    = {user_id: {"username": username, "nickname": username}}
             self._rooms[sid]    = {}
             self._messages[sid] = {}
-            self._sync[sid]     = {"rooms": {}, "users": {user_id: username}, "messages": {}}
+            self._sync[sid]     = {"rooms": {}, "users": {user_id: {"username": username, "nickname": username}}, "messages": {}}
             print(f"[dispatcher] REGISTER OK → userId={user_id} username={username}")
             self.sio.emit("register_success", {"username": username}, to=sid)
         else:
@@ -310,9 +320,10 @@ class ProtocolDispatcher:
     def _on_sync_start(self, sid, status, p):
         my_id    = self._user_ids.get(sid, 0)
         my_name  = self._users.get(sid, {}).get(my_id, "")
+        my_entry = {"username": my_name, "nickname": my_name} if my_id else None
         self._sync[sid] = {
             "rooms":    {},
-            "users":    {my_id: my_name} if my_id else {},
+            "users":    {my_id: my_entry} if my_id and my_entry else {},
             "messages": {},
         }
         print(f"[dispatcher] SYNC_START (my_id={my_id} my_name={my_name!r})")
@@ -334,9 +345,10 @@ class ProtocolDispatcher:
         buf = self._sync.get(sid)
         if buf is None:
             return
-        uid  = p.get("id")
-        name = descifrar_texto(p.get("name") or p.get("username", ""))
-        buf["users"][uid] = name
+        uid      = p.get("id")
+        username = descifrar_texto(p.get("username") or p.get("name", ""))
+        nickname = descifrar_texto(p.get("nickname") or p.get("name") or p.get("username", ""))
+        buf["users"][uid] = {"username": username, "nickname": nickname}
         print(f"[dispatcher]   SYNC usuario #{uid}: {name}")
 
     def _on_sync_msg(self, sid, status, p):
@@ -362,7 +374,14 @@ class ProtocolDispatcher:
 
         rooms_list = []
         for r in buf["rooms"].values():
-            member_names = [users.get(uid, str(uid)) for uid in r.get("userIds", [])]
+            # members usa username plano para que selectRoom() pueda hacer includes(currentUser)
+            member_names = []
+            for uid in r.get("userIds", []):
+                entry = users.get(uid)
+                if isinstance(entry, dict):
+                    member_names.append(entry.get("username") or str(uid))
+                else:
+                    member_names.append(entry or str(uid))
             rooms_list.append({
                 "id":            r["id"],
                 "name":          r["name"],
@@ -370,11 +389,17 @@ class ProtocolDispatcher:
                 "members":       member_names,
             })
 
-        all_users = [
-            {"username": name, "nickname": name, "online": True}
-            for uid, name in users.items()
-            if uid != my_id
-        ]
+        all_users = []
+        for uid, entry in users.items():
+            if uid == my_id:
+                continue
+            if isinstance(entry, dict):
+                nick = entry.get("nickname") or entry.get("username") or str(uid)
+                uname = entry.get("username") or str(uid)
+            else:
+                nick = entry or str(uid)
+                uname = entry or str(uid)
+            all_users.append({"username": uname, "nickname": nick, "online": True})
 
         print(f"[dispatcher] SYNC_END → {len(rooms_list)} salas, {len(users)} usuarios")
         self.sio.emit("lobby_update", {
@@ -399,7 +424,7 @@ class ProtocolDispatcher:
 
         coord_id = room.get("coordinatorId")
         history  = [
-            [self._username(sid, m["user_id"]), m["text"]]
+            [self._username(sid, m["user_id"]) if m.get("user_id") != 0 else "__SYSTEM__", m["text"]]
             for m in messages.get(room_id, [])
         ]
 
@@ -424,13 +449,18 @@ class ProtocolDispatcher:
             return
 
         coord_id   = room.get("coordinatorId")
-        coord_name = users.get(coord_id, str(coord_id))
-        members    = [users.get(uid, str(uid)) for uid in room.get("userIds", [])]
+        coord_entry = users.get(coord_id, {})
+        coord_name  = coord_entry.get("nickname") or coord_entry.get("username") if isinstance(coord_entry, dict) else str(coord_id)
+        members = []
+        for uid in room.get("userIds", []):
+            e = users.get(uid)
+            members.append((e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid)))
 
-        all_users = [
-            {"username": name, "nickname": name, "online": True}
-            for uid, name in users.items()
-        ]
+        all_users = []
+        for uid, e in users.items():
+            nick  = (e.get("nickname") or e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid))
+            uname = (e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid))
+            all_users.append({"username": uname, "nickname": nick, "online": True})
 
         self.sio.emit("coord_data", {
             "room_id":     room_id,
@@ -451,15 +481,17 @@ class ProtocolDispatcher:
             return
 
         coord_id    = room.get("coordinatorId")
-        member_list = [
-            {
-                "username": users.get(uid, str(uid)),
-                "nickname": users.get(uid, str(uid)),
+        member_list = []
+        for uid in room.get("userIds", []):
+            e = users.get(uid)
+            nick  = (e.get("nickname") or e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid))
+            uname = (e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid))
+            member_list.append({
+                "username": uname,
+                "nickname": nick,
                 "online":   True,
                 "is_coord": uid == coord_id,
-            }
-            for uid in room.get("userIds", [])
-        ]
+            })
 
         self.sio.emit("members_data", {
             "room_id": room_id,
@@ -598,12 +630,13 @@ class ProtocolDispatcher:
         username = descifrar_texto(p.get("username") or p.get("name", ""))
         user_id  = p.get("userId") or p.get("id")
 
+        nickname_raw = descifrar_texto(p.get("nickname") or p.get("username") or p.get("name", ""))
         if user_id and sid in self._users:
-            self._users[sid][user_id] = username
+            self._users[sid][user_id] = {"username": username, "nickname": nickname_raw}
 
-        print(f"[dispatcher] USER_ONLINE: {username} (#{user_id})")
+        print(f"[dispatcher] USER_ONLINE: {nickname_raw} (#{user_id})")
         self.sio.emit("user_online",
-                      {"username": username, "nickname": username,
+                      {"username": username, "nickname": nickname_raw,
                        "userId": user_id}, to=sid)
 
     def _on_user_offline(self, sid, status, p):

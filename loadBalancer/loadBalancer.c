@@ -26,6 +26,7 @@ gcc loadBalancer.c cJSON.c -o loadbalancer -lpthread
 #include <sys/mman.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <errno.h>
 
@@ -67,8 +68,8 @@ static ServerEntry g_servers_template[] = {
     /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
 
     /* 1. Tu servidor local dentro de Docker (Mapeo 5015:5006) */
-    { "10.7.6.242", 5014, "10.7.6.242", 5014, 5015, 0, 0 },
-    { "10.7.1.30", 5006, "10.7.1.30", 5006, 5001, 0, 0 }
+    { "10.7.15.96", 5014, "10.7.15.96", 5014, 5015, 0, 0 },
+    { "10.7.16.129", 5006, "10.7.16.129", 5006, 5001, 0, 0 }
 };
 
 #define SERVER_COUNT (int)(sizeof(g_servers_template) / sizeof(g_servers_template[0]))
@@ -129,21 +130,36 @@ static int is_reachable(const char* ip, int port)
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return 0;
 
-    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    // Poner el socket en modo no-bloqueante
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(port);
     inet_pton(AF_INET, ip, &addr.sin_addr);
 
-    int ok = (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0);
+    int ok = 0;
+    int rc = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
 
-    // ── NUEVA LÍNEA: Si la conexión fue exitosa, enviamos el identificador ──
-    if (ok) {
-        send(fd, "HEALTH_CHECK\n", 13, 0);
+    if (rc == 0) {
+        // Conexión inmediata (localhost)
+        ok = 1;
+    } else if (errno == EINPROGRESS) {
+        // Esperar hasta 2 segundos
+        fd_set wset;
+        FD_ZERO(&wset);
+        FD_SET(fd, &wset);
+        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+
+        if (select(fd + 1, NULL, &wset, NULL, &tv) == 1) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            ok = (err == 0);
+        }
+        // select devolvió 0 (timeout) o -1 (error) → ok queda 0
     }
 
     close(fd);
@@ -158,22 +174,34 @@ static void* health_thread(void* arg)
     (void)arg;
     while (1) {
         sleep(5);
-        pthread_mutex_lock(&g_state->lock);
 
+        // 1. Leer IPs/puertos SIN el mutex
+        pthread_mutex_lock(&g_state->lock);
+        int count = g_state->count;
+        char ips[16][64];
+        int  ports[16];
+        for (int i = 0; i < count; i++) {
+            strncpy(ips[i], g_state->servers[i].int_ip, 63);
+            ports[i] = g_state->servers[i].int_port;
+        }
+        pthread_mutex_unlock(&g_state->lock);
+
+        // 2. Probar conectividad SIN el mutex (puede tardar hasta 2s × N)
+        int results[16];
+        for (int i = 0; i < count; i++)
+            results[i] = is_reachable(ips[i], ports[i]);
+
+        // 3. Escribir resultados CON el mutex
+        pthread_mutex_lock(&g_state->lock);
         LOG("[HEALTH] === Estado actual de servidores ===");
-        for (int i = 0; i < g_state->count; i++) {
+        for (int i = 0; i < count; i++) {
             ServerEntry* s = &g_state->servers[i];
             int prev = s->alive;
-
-            s->alive = is_reachable(s->int_ip, s->int_port);
+            s->alive = results[i];
 
             if (prev != s->alive) {
                 LOG("[HEALTH] %s:%d -> %s", s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
-
-                if (!s->alive) {
-                    s->connections = 0;
-                    LOG("[HEALTH] Servidor caido. Reseteando conexiones a 0 para %s:%d", s->int_ip, s->int_port);
-                }
+                if (!s->alive) s->connections = 0;
             }
             LOG("[HEALTH]   [%d] %s:%d alive=%d connections=%d",
                 i, s->int_ip, s->int_port, s->alive, s->connections);

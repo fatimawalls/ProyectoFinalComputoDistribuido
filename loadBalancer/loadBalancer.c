@@ -67,7 +67,7 @@ static ServerEntry g_servers_template[] = {
     /* { IP_Docker, Port_Docker, IP_Windows, Port_Windows, Port_UDP, conn, alive } */
 
     /* 1. Tu servidor local dentro de Docker (Mapeo 5015:5006) */
-    { "10.7.6.242", 5003, "10.7.6.242", 5003, 5001, 0, 0 },
+    { "10.7.6.242", 5014, "10.7.6.242", 5014, 5015, 0, 0 },
     { "10.7.1.30", 5006, "10.7.1.30", 5006, 5001, 0, 0 }
 };
 

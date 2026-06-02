@@ -351,26 +351,51 @@ static void on_data_change(const char* resp_json, int sender_uid)
    ============================================================ */
 static void broadcast_user_online(int user_id, const char* username)
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) { perror("broadcast socket"); return; }
-
-    int on = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(UDP_PORT);
-    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n",
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
         user_id, username);
-    sendto(sock, buf, strlen(buf), 0,
-        (struct sockaddr*)&addr, sizeof(addr));
+
+    /* Unicast a cada cliente registrado + broadcast fallback */
+    udp_broadcast_all(buf, user_id);
+
+    /* Publicar a Redis para que otros servidores notifiquen a sus clientes */
+    redisContext* pub = redisConnect(redisIP, redisPORT);
+    if (pub && !pub->err) {
+        redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", buf);
+        if (reply) freeReplyObject(reply);
+        redisFree(pub);
+    } else {
+        LOG("[REDIS] Fallo al publicar USER_ONLINE");
+        if (pub) redisFree(pub);
+    }
+
     LOG("[UDP BROADCAST USER_ONLINE] uid=%d username=%s", user_id, username);
-    close(sock);
+}
+
+/* Envía USER_ONLINE por TCP al cliente recién conectado, uno por cada usuario activo.
+   Se usa el mismo socket TCP para garantizar orden: llegan justo después de SYNC_END. */
+static void notify_existing_online_users(int sock, int skip_uid)
+{
+    pthread_mutex_lock(&g_state->lock);
+    ShmUser active[MAX_USERS];
+    int count = 0;
+    for (int i = 0; i < MAX_USERS; i++) {
+        ShmUser* u = &g_state->users[i];
+        if (u->active && u->db_user_id != skip_uid)
+            active[count++] = *u;
+    }
+    pthread_mutex_unlock(&g_state->lock);
+
+    for (int i = 0; i < count; i++) {
+        char buf[512];
+        snprintf(buf, sizeof(buf),
+            "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
+            active[i].db_user_id, active[i].username);
+        send_line(sock, buf);
+        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s -> nuevo cliente (sock=%d)",
+            active[i].db_user_id, active[i].username, sock);
+    }
 }
 
 /* ============================================================
@@ -562,6 +587,7 @@ static void atender_cliente(int sock, const char* client_ip)
                 LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
+                notify_existing_online_users(sock, uid);
                 cJSON_Delete(req);
                 break;
             }
@@ -608,6 +634,7 @@ static void atender_cliente(int sock, const char* client_ip)
                 LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
+                notify_existing_online_users(sock, uid);
             }
             else {
                 uid = -1;

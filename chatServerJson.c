@@ -369,6 +369,31 @@ static void broadcast_user_online(int user_id, const char* username)
     LOG("[UDP BROADCAST USER_ONLINE] uid=%d username=%s", user_id, username);
 }
 
+/* ============================================================
+   broadcast_user_offline
+   ============================================================ */
+static void broadcast_user_offline(int user_id, const char* username)
+{
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\"}",
+        user_id, username);
+
+    udp_broadcast_all(buf, user_id);
+
+    redisContext* pub = redisConnect(redisIP, redisPORT);
+    if (pub && !pub->err) {
+        redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", buf);
+        if (reply) freeReplyObject(reply);
+        redisFree(pub);
+    } else {
+        LOG("[REDIS] Fallo al publicar USER_OFFLINE");
+        if (pub) redisFree(pub);
+    }
+
+    LOG("[UDP BROADCAST USER_OFFLINE] uid=%d username=%s", user_id, username);
+}
+
 /* Envía USER_ONLINE por TCP al cliente recién conectado, uno por cada usuario activo.
    Se usa el mismo socket TCP para garantizar orden: llegan justo después de SYNC_END. */
 static void notify_existing_online_users(int sock, int skip_uid)
@@ -671,8 +696,10 @@ static void atender_cliente(int sock, const char* client_ip)
         }
     }
 
-    if (uid > 0)
+    if (uid > 0) {
+        broadcast_user_offline(uid, username);
         report_load_balancer("disconnect");
+    }
 
     shm_unregister_user(uid);
     close(sock);

@@ -130,13 +130,19 @@ class AppController:
         )
         self._app = app
 
-        # Conectar callbacks en tiempo real de mensajería hacia la GUI
-        self.network.on_new_message         = getattr(app, "on_new_message",     None)
-        self.network.on_room_created        = getattr(app, "on_room_created",    None)
-        self.network.on_user_added          = getattr(app, "on_user_added",      None)
-        self.network.on_user_removed        = getattr(app, "on_user_removed",    None)
-        self.network.on_message_deleted     = getattr(app, "on_message_deleted", None)
-        self.network.on_room_deleted        = getattr(app, "on_room_deleted",    None)
+        # Conectar callbacks en tiempo real de mensajería hacia la GUI.
+        # Todos pasan por root.after(0) para ejecutarse en el hilo principal
+        # de Tkinter — los callbacks llegan desde el hilo de red y Tkinter
+        # no es thread-safe.
+        def _gui(fn, *args):
+            self.root.after(0, lambda: fn(*args))
+
+        self.network.on_new_message     = lambda rid, msg:  _gui(app.on_new_message,     rid, msg)
+        self.network.on_room_created    = lambda room:       _gui(app.on_room_created,    room)
+        self.network.on_user_added      = lambda rid, user:  _gui(app.on_user_added,      rid, user)
+        self.network.on_user_removed    = lambda rid, uid:   _gui(app.on_user_removed,    rid, uid)
+        self.network.on_message_deleted = lambda rid, mid:   _gui(app.on_message_deleted, rid, mid)
+        self.network.on_room_deleted    = lambda rid:        _gui(app.on_room_deleted,    rid)
         self.network.on_server_disconnected = self.on_server_disconnected
         self.network.on_user_offline        = self.on_user_offline_received
 

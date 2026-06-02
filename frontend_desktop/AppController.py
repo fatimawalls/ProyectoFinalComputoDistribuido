@@ -258,7 +258,7 @@ class AppController:
         if success:
             messagebox.showinfo(
                 "Registro Exitoso",
-                f"Cuenta '{username}' creada (ID: {user_id}).\nAhora puedes iniciar sesión.",
+                f"Cuenta '{username}' creada .\nAhora puedes iniciar sesión.",
                 parent=self.root,
             )
             if self.register_window:

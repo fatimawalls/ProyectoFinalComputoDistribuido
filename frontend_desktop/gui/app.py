@@ -844,7 +844,7 @@ class ChatClientGUI:
                 # Buscamos en el mapeo de usuarios guardado en memoria durante el SYNC
                 user_info = self.network.users.get(u_id, {})
                 user_name = user_info.get("nickname") or user_info.get("name") or user_info.get("username") or "Desconocido"
-                lb.insert(tk.END, f"  • ID: {u_id} — {user_name}")
+                lb.insert(tk.END, f"  • {user_name}")
         else:
             members_list = self.mock.get_members(room_id)
             for m in members_list:
@@ -1060,7 +1060,7 @@ class ChatClientGUI:
                 r_id   = req.get("userId",   req.get("username", "?"))
                 r_name = req.get("nickname", req.get("name",     "Usuario"))
 
-                tk.Label(r_item, text=f"• {r_name} (ID: {r_id})", font=self.FONT_UI,
+                tk.Label(r_item, text=f"• {r_name} ", font=self.FONT_UI,
                          bg=self.BG_MAIN, fg=self.TEXT_MAIN).pack(side="left")
 
                 def accept_action(uid=r_id):

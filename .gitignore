@@ -31,4 +31,5 @@ local_data/
 
 # Build files
 dist/
-build/
+build/__pycache__/
+*.pyc

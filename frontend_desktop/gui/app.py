@@ -5,6 +5,11 @@ from tkinter import scrolledtext
 from gui.user_profile import UserProfileWindow
 from gui.mock_data import MockServer
 
+try:
+    import local_DB
+except ImportError:
+    local_DB = None
+
 # Nombres de salas para la simulación de creación
 SIM_ROOM_NAMES = ["ops-team", "security", "backend", "qa-testing", "design", "infra", "alerts"]
 
@@ -455,6 +460,8 @@ class ChatClientGUI:
             if is_mem:
                 self.show_chat_view(rid)
                 room["notifications"] = 0
+                if local_DB:
+                    local_DB.openChat(rid)
             else:
                 self.show_private_room_view(rid)
             self.refresh_sidebar()
@@ -643,6 +650,8 @@ class ChatClientGUI:
 
     def clear_main_panel(self):
         self.chat_history = None
+        self._btn_manage      = None
+        self._btn_manage_room = None
         for widget in self.main_panel.winfo_children():
             widget.destroy()
 
@@ -709,6 +718,9 @@ class ChatClientGUI:
             btn_manage.bind("<Button-1>", lambda e: self.open_coordinator_panel(room_id))
             btn_manage.bind("<Enter>",    lambda e: btn_manage.config(fg=self.ACCENT_HOVER))
             btn_manage.bind("<Leave>",    lambda e: btn_manage.config(fg=self.ACCENT))
+            # Guardar referencia para poder actualizar el badge en tiempo real
+            self._btn_manage      = btn_manage
+            self._btn_manage_room = room_id
         else:
             # Botón Leave Room
             btn_leave = tk.Label(header, text="← Leave Room", font=self.FONT_LABEL,
@@ -906,6 +918,7 @@ class ChatClientGUI:
             )
 
             self.current_room = None
+            self.pending_rooms.discard(room_id)
             self.refresh_sidebar()
             self.show_welcome_view()
             return
@@ -1052,18 +1065,30 @@ class ChatClientGUI:
 
                 def accept_action(uid=r_id):
                     if self.network:
+                        # Optimistic: quitar de requestIds antes de que el server responda
+                        room_data = self.network.rooms.get(room_id, {})
+                        req_ids = room_data.get("requestIds", [])
+                        if uid in req_ids:
+                            req_ids.remove(uid)
                         self.network.add_user_to_room(int(uid), room_id)
                     else:
                         self.mock.accept_request(room_id, uid)
                     panel.destroy()
+                    self.show_chat_view(room_id)   # reconstruye cabecera con cuenta correcta
                     self.open_coordinator_panel(room_id)
 
                 def reject_action(uid=r_id):
                     if self.network:
+                        # Optimistic: quitar de requestIds antes de que el server responda
+                        room_data = self.network.rooms.get(room_id, {})
+                        req_ids = room_data.get("requestIds", [])
+                        if uid in req_ids:
+                            req_ids.remove(uid)
                         self.network.delete_join_request(room_id, int(uid))
                     else:
                         self.mock.reject_request(room_id, uid)
                     panel.destroy()
+                    self.show_chat_view(room_id)   # reconstruye cabecera con cuenta correcta
                     self.open_coordinator_panel(room_id)
 
                 tk.Button(r_item, text="REJECT", font=self.FONT_SMALL,
@@ -1118,12 +1143,17 @@ class ChatClientGUI:
                                           f"¿Expulsar a {target_name} de la sala?",
                                           parent=panel):
                         if self.network:
-                            # Handbook: {"type":"REMOVE_USER","chatRoomId":X,"userId":Y}
+                            # Optimistic: quitar de userIds antes de que el server responda
+                            room_data = self.network.rooms.get(room_id, {})
+                            user_ids = room_data.get("userIds", [])
+                            if target_id in user_ids:
+                                user_ids.remove(target_id)
                             self.network.remove_user_from_room(target_id, room_id)
                         else:
                             self.mock.kick_user(room_id, target_id)
                         panel.destroy()
-                        self.refresh_sidebar()
+                        self.show_chat_view(room_id)   # reconstruye cabecera
+                        self.open_coordinator_panel(room_id)  # muestra lista actualizada
                     else:
                         panel.wait_visibility()
                         panel.grab_set()
@@ -1258,6 +1288,9 @@ class ChatClientGUI:
             self.chat_history.config(state="disabled")
             self.chat_history.yview(tk.END)
         else:
+            if not self._is_member(room_id):
+                return
+
             if self.network:
                 room = self.network.rooms.get(room_id)
                 if room:
@@ -1272,8 +1305,29 @@ class ChatClientGUI:
 
             self.show_toast(room_id, room_name, sender, text)
 
+    def _refresh_manage_badge(self, room_id=None):
+        """Actualiza el texto del botón ⚙ Manage Room sin reconstruir el chat."""
+        btn = getattr(self, "_btn_manage", None)
+        if btn is None:
+            return
+        target = getattr(self, "_btn_manage_room", None)
+        if room_id is not None and target != room_id:
+            return
+        try:
+            room = self._get_room(target)
+            if not room:
+                return
+            count = (len(room.get("requestIds", []))
+                     if self.network
+                     else len(self.mock.get_join_requests(target)))
+            text = "⚙ Manage Room" + (f"  [{count}]" if count > 0 else "")
+            btn.config(text=text)
+        except Exception:
+            pass
+
     def on_room_created(self, room_dict):
-        """Llega cuando se crea una sala nueva (broadcast del servidor)."""
+        """Llega cuando se crea una sala nueva o llega una solicitud de join."""
+        self._refresh_manage_badge(room_dict.get("id") if room_dict else None)
         self.refresh_sidebar()
 
     def on_user_added(self, room_id, user_dict):
@@ -1282,6 +1336,11 @@ class ChatClientGUI:
         Ya no insertamos mensaje local aquí porque el evento se guarda
         como MESSAGE con userId=0 y llega por on_new_message().
         """
+        if self.network:
+            my_id = self.network.me.get("id")
+            added_id = user_dict.get("id") if isinstance(user_dict, dict) else None
+            if added_id == my_id:
+                self.pending_rooms.discard(room_id)
         self.refresh_sidebar()
 
     def on_user_removed(self, room_id, user_id):
@@ -1292,9 +1351,11 @@ class ChatClientGUI:
         """
         my_id = self.network.me.get("id") if self.network else None
 
-        if user_id == my_id and self.current_room == room_id:
-            self.current_room = None
-            self.show_welcome_view()
+        if user_id == my_id:
+            self.pending_rooms.discard(room_id)
+            if self.current_room == room_id:
+                self.current_room = None
+                self.show_welcome_view()
 
         self.refresh_sidebar()
 

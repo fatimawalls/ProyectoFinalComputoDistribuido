@@ -64,7 +64,7 @@ import json
 import socket
 import threading
 
-from cifrado import cifrar_texto
+from cifrado import cifrar_texto, descifrar_texto
 
 ENCODING = "utf-8"
 
@@ -512,6 +512,11 @@ class NetworkClient:
         if nickname is None:
             nickname = data.get("name") or username
 
+        if username is not None:
+            username = descifrar_texto(username)
+        if nickname is not None:
+            nickname = descifrar_texto(nickname)
+
         existing["id"] = user_id
 
         if username is not None:
@@ -549,7 +554,7 @@ class NetworkClient:
 
         return {
             "id":            room_id,
-            "name":          cr.get("name", existing.get("name", "")),
+            "name":          descifrar_texto(cr.get("name", existing.get("name", ""))),
             "coordinatorId": coordinator_id,
             "userIds":       user_ids,
             "messageIds":    list(cr.get("messageIds", existing.get("messageIds", []))),
@@ -618,20 +623,19 @@ class NetworkClient:
     def _on_auth_response(self, obj: dict):
         success = bool(obj.get("success"))
         if success:
-            self.me = {
-                "id":       obj.get("userId"),
-                "username": obj.get("username", ""),
-                "nickname": obj.get("nickname") or obj.get("username", ""),
-            }
-
-            self._upsert_user(
+            user = self._upsert_user(
                 {
-                    "id":       self.me["id"],
-                    "username": self.me["username"],
-                    "nickname": self.me["nickname"],
+                    "id":       obj.get("userId"),
+                    "username": obj.get("username", ""),
+                    "nickname": obj.get("nickname") or obj.get("username", ""),
                 },
                 online=True
             )
+            self.me = {
+                "id":       user["id"],
+                "username": user.get("username", ""),
+                "nickname": user.get("nickname", ""),
+            }
 
             print(f"[RED] Login OK → id={self.me['id']} username={self.me['username']}")
             if self.on_login_response:
@@ -644,7 +648,7 @@ class NetworkClient:
     def _on_register_response(self, obj: dict):
         success  = bool(obj.get("success"))
         user_id  = obj.get("userId", -1)
-        username = obj.get("username", "")
+        username = descifrar_texto(obj.get("username", ""))
         print(f"[RED] Register {'OK' if success else 'FAIL'}")
         if self.on_register_response:
             self.on_register_response(success, user_id, username)
@@ -692,7 +696,7 @@ class NetworkClient:
             "id":         obj.get("id"),
             "userId":     obj.get("userId"),
             "chatRoomId": room_id,
-            "text":       obj.get("text", ""),
+            "text":       descifrar_texto(obj.get("text", "")),
         }
 
         if self._append_message_once(msg):
@@ -770,7 +774,7 @@ class NetworkClient:
             "id":         msg_data.get("id"),
             "userId":     msg_data.get("userId"),
             "chatRoomId": room_id,
-            "text":       msg_data.get("text", ""),
+            "text":       descifrar_texto(msg_data.get("text", "")),
         }
 
         was_new = self._append_message_once(msg)

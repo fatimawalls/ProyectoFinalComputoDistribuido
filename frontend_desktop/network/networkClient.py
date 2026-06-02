@@ -746,17 +746,15 @@ class NetworkClient:
         """
         user_id  = obj.get("userId") or obj.get("id")
         username = obj.get("username") or obj.get("name", "")
-        nickname = obj.get("nickname") or username
 
         if user_id:
-            user = self._upsert_user(
-                {
-                    "id": user_id,
-                    "username": username,
-                    "nickname": nickname,
-                },
-                online=True
-            )
+            data = {"id": user_id, "username": username}
+            # Solo incluir nickname si el servidor lo mandó — evita sobreescribir
+            # el nickname real (del sync) con el username cuando no viene el campo.
+            if obj.get("nickname"):
+                data["nickname"] = obj["nickname"]
+
+            user = self._upsert_user(data, online=True)
 
             print(f"[RED] Usuario online: {self._display_name_from_user(user)} (#{user_id})")
 
@@ -769,17 +767,13 @@ class NetworkClient:
         """
         user_id  = obj.get("userId") or obj.get("id")
         username = obj.get("username") or obj.get("name", "")
-        nickname = obj.get("nickname") or username
 
         if user_id:
-            user = self._upsert_user(
-                {
-                    "id": user_id,
-                    "username": username,
-                    "nickname": nickname,
-                },
-                online=False
-            )
+            data = {"id": user_id, "username": username}
+            if obj.get("nickname"):
+                data["nickname"] = obj["nickname"]
+
+            user = self._upsert_user(data, online=False)
 
             print(f"[RED] Usuario offline: {self._display_name_from_user(user)} (#{user_id})")
 

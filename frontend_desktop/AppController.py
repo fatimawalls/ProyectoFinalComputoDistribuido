@@ -250,10 +250,6 @@ class AppController:
                     pass
             return
         self.show_lobby()
-        # Los USER_ONLINE de usuarios ya conectados llegan por TCP justo después
-        # del SYNC_END. Damos un tick extra para que el hilo TCP los procese
-        # antes de pintar el sidebar definitivo.
-        self.root.after(150, self._safe_refresh_sidebar)
 
     def on_register_response_received(self, success, user_id, username):
         self.root.after(0, lambda: self._safe_handle_register_ui(success, user_id, username))

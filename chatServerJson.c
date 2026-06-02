@@ -255,6 +255,43 @@ static void udp_notify_user(int db_user_id, const char* json_str)
 
 
 /* ============================================================
+   FORWARD CHAT_USER — reenvía una línea al cliente inyectando
+   el campo "online" si es un mensaje CHAT_USER.
+   Para cualquier otro tipo lo reenvía sin modificar.
+   ============================================================ */
+static void forward_db_line(int sock, const char* line)
+{
+    cJSON* j = cJSON_Parse(line);
+    if (!j) { send_line(sock, line); return; }
+
+    cJSON* jtype = cJSON_GetObjectItem(j, "type");
+    if (cJSON_IsString(jtype) && strcmp(jtype->valuestring, "CHAT_USER") == 0) {
+        cJSON* jid = cJSON_GetObjectItem(j, "id");
+        int is_online = 0;
+        if (cJSON_IsNumber(jid)) {
+            int uid = jid->valueint;
+            pthread_mutex_lock(&g_state->lock);
+            for (int i = 0; i < MAX_USERS; i++) {
+                if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
+                    is_online = 1;
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&g_state->lock);
+        }
+        cJSON_AddBoolToObject(j, "online", is_online);
+        char* out = cJSON_PrintUnformatted(j);
+        if (out) { send_line(sock, out); free(out); }
+        else       send_line(sock, line);
+        cJSON_Delete(j);
+        return;
+    }
+
+    cJSON_Delete(j);
+    send_line(sock, line);
+}
+
+/* ============================================================
    REDIS SUBSCRIBER — Escucha actualizaciones de otros servidores
    ============================================================ */
 static void* redis_subscriber_thread(void* arg) {
@@ -586,7 +623,7 @@ static void atender_cliente(int sock, const char* client_ip)
             char* line = strtok(copy, "\n");
             while (line) {
                 if (line[0]) {
-                    send_line(sock, line);
+                    forward_db_line(sock, line);
                     cJSON* j = cJSON_Parse(line);
                     if (j) {
                         cJSON* js = cJSON_GetObjectItem(j, "success");
@@ -633,7 +670,7 @@ static void atender_cliente(int sock, const char* client_ip)
             char* line = strtok(copy, "\n");
             while (line) {
                 if (line[0]) {
-                    send_line(sock, line);
+                    forward_db_line(sock, line);
                     cJSON* j = cJSON_Parse(line);
                     if (j) {
                         cJSON* jt  = cJSON_GetObjectItem(j, "type");

@@ -75,6 +75,7 @@ class NetworkClient:
         self.connected  = False
         self._buf       = ""          # buffer TCP parcial
         self._sync_lock = threading.Event()  # se setea al terminar el sync
+        self._send_lock = threading.Lock()   # protege connected + sendall
 
         # ── Estado en memoria ────────────────────────────────────
         self.me       = {}            # {"id": int, "username": str}
@@ -239,15 +240,17 @@ class NetworkClient:
 
     def _send(self, obj: dict):
         """Serializa un dict como JSON y lo envía con \n final."""
-        if not self.connected:
-            print("[RED] Error: no conectado.")
-            return
-        try:
-            line = json.dumps(obj, ensure_ascii=False) + "\n"
-            self.socket.sendall(line.encode(ENCODING))
-            print(f"[RED] → SEND {obj.get('type', '?')}")
-        except Exception as e:
-            print(f"[RED] Error al enviar: {e}")
+        with self._send_lock:
+            if not self.connected:
+                print("[RED] Error: no conectado.")
+                return
+            try:
+                line = json.dumps(obj, ensure_ascii=False) + "\n"
+                self.socket.sendall(line.encode(ENCODING))
+                print(f"[RED] → SEND {obj.get('type', '?')}")
+            except OSError as e:
+                print(f"[RED] Error al enviar: {e}")
+                self.connected = False
 
     def _get_udp_endpoint(self):
         """Devuelve (ip, port) del socket UDP local, para enviarlo al servidor en AUTH."""
@@ -416,14 +419,16 @@ class NetworkClient:
                 data = self.socket.recv(4096)
                 if not data:
                     print("[RED] Servidor cerró la conexión.")
-                    self.connected = False
+                    with self._send_lock:
+                        self.connected = False
                     break
                 self._buf += data.decode(ENCODING)
                 self._process_buffer()
             except Exception as e:
                 if self.connected:
                     print(f"[RED] Error en listen_loop: {e}")
-                self.connected = False
+                with self._send_lock:
+                    self.connected = False
                 break
 
         if self.on_server_disconnected:

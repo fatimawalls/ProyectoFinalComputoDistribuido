@@ -150,12 +150,12 @@ static int recv_line(int fd, char* buf, int maxlen)
     char c;
     while (total < maxlen - 1) {
         int n = recv(fd, &c, 1, 0);
-        if (n <= 0) return n;
+        if (n <= 0) return -1;   // -1 = EOF real o error (distinto de línea vacía)
         if (c == '\n') break;
         buf[total++] = c;
     }
     buf[total] = '\0';
-    return total;
+    return total;              // 0 = línea vacía válida, >0 = mensaje normal
 }
 
 static void send_line(int fd, const char* s)
@@ -424,7 +424,7 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
     char  tmp[BUFSIZE];
     while (1) {
         int n = recv_line(fd, tmp, sizeof(tmp));
-        if (n <= 0) break;
+        if (n < 0) break;
         if (tmp[0] == '\0') continue;
         LOG("[DB-RESP] Línea recibida de DB: '%s'", tmp);
         int needed = strlen(tmp) + 2;
@@ -534,7 +534,8 @@ static void atender_cliente(int sock, const char* client_ip)
     /* ── Fase 1: Autenticación ───────────────────────────────── */
     while (uid < 0) {
         int n = recv_line(sock, req_buf, sizeof(req_buf));
-        if (n <= 0) { LOG("[HIJO-AUTH] Cliente desconectado"); close(sock); exit(0); }
+        if (n < 0) { LOG("[HIJO-AUTH] Cliente desconectado"); close(sock); exit(0); }
+        if (n == 0) continue; // línea vacía, ignorar
         LOG("[HIJO-AUTH] Recibido: '%s'", req_buf);
 
         cJSON* req = cJSON_Parse(req_buf);
@@ -648,7 +649,8 @@ static void atender_cliente(int sock, const char* client_ip)
 
     while (1) {
         int n = recv_line(sock, req_buf, sizeof(req_buf));
-        if (n <= 0) { LOG("[HIJO-SESION] Desconectado uid=%d", uid); break; }
+        if (n < 0) { LOG("[HIJO-SESION] Desconectado uid=%d", uid); break; }
+        if (n == 0) continue; // línea vacía, ignorar
         LOG("[HIJO-SESION] uid=%d req: '%s'", uid, req_buf);
 
         int lines = db_request(req_buf, resp_buf, sizeof(resp_buf));

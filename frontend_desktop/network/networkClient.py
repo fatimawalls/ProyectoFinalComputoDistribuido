@@ -271,15 +271,16 @@ class NetworkClient:
             "udpPort":  udp_port,
         })
 
-    def register(self, username: str, password: str):
+    def register(self, username: str, password: str, nickname: str = None):
         """Envía CREATE_ACCOUNT al servidor con campos cifrados."""
         udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
-            "type":     "CREATE_ACCOUNT",
-            "username": cifrar_texto(username),
-            "password": cifrar_texto(password),
-            "udpIp":    udp_ip,
-            "udpPort":  udp_port,
+            "type":      "CREATE_ACCOUNT",
+            "username":  cifrar_texto(username),
+            "password":  cifrar_texto(password),
+            "nickname":  cifrar_texto(nickname or username),
+            "udpIp":     udp_ip,
+            "udpPort":   udp_port,
         })
 
     def send_message(self, room_id: int, text: str):

@@ -512,8 +512,8 @@ class NetworkClient:
     def _display_name_from_user(self, user: dict) -> str:
         return (
             user.get("nickname")
-            or user.get("name")
-            or user.get("username")
+            #or user.get("name")
+            #or user.get("username")
             or str(user.get("id", "?"))
         )
 

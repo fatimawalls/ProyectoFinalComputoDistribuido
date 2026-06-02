@@ -120,6 +120,30 @@ static void report_load_balancer(const char* event)
     close(fd);
 }
 
+
+
+/* ============================================================
+   SHARED MEMORY — usuarios conectados
+   ============================================================ */
+typedef struct {
+    int  db_user_id;
+    char username[64];
+    char nickname[64];
+    int  active;
+    char udp_ip[64];
+    int  udp_port;
+} ShmUser;
+
+typedef struct {
+    ShmUser         users[MAX_USERS];
+    int             user_count;
+    pthread_mutex_t lock;
+} SharedState;
+
+static SharedState* g_state = NULL;
+static int          g_tcp_sd = -1;
+static int          g_udp_sd = -1;
+
 static void* heartbeat_thread(void* arg)
 {
     (void)arg;
@@ -159,28 +183,6 @@ static void* heartbeat_thread(void* arg)
     }
     return NULL;
 }
-
-/* ============================================================
-   SHARED MEMORY — usuarios conectados
-   ============================================================ */
-typedef struct {
-    int  db_user_id;
-    char username[64];
-    char nickname[64];
-    int  active;
-    char udp_ip[64];
-    int  udp_port;
-} ShmUser;
-
-typedef struct {
-    ShmUser         users[MAX_USERS];
-    int             user_count;
-    pthread_mutex_t lock;
-} SharedState;
-
-static SharedState* g_state = NULL;
-static int          g_tcp_sd = -1;
-static int          g_udp_sd = -1;
 
 /* ============================================================
    RED — leer/enviar línea terminada en '\n'

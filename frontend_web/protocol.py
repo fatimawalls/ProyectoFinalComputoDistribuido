@@ -199,6 +199,7 @@ class ProtocolDispatcher:
         self._users:    dict[str, dict]             = {}
         self._messages: dict[str, dict]             = {}
         self._sync:     dict[str, dict]             = {}
+        self._seen:     dict[str, set]              = {}  # dedup TCP+UDP
 
         self._handlers = {
             Protocol.RES_LOGIN:            self._on_login,
@@ -226,9 +227,13 @@ class ProtocolDispatcher:
         return self._user_ids.get(sid, 0)
 
     def get_user_id_by_name(self, sid: str, username: str) -> int:
-        for uid, name in self._users.get(sid, {}).items():
-            if name == username:
-                return uid
+        for uid, entry in self._users.get(sid, {}).items():
+            if isinstance(entry, dict):
+                if entry.get("username") == username or entry.get("nickname") == username:
+                    return uid
+            else:
+                if entry == username:
+                    return uid
         return 0
 
     def remove_sid(self, sid: str):
@@ -237,6 +242,7 @@ class ProtocolDispatcher:
         self._rooms.pop(sid, None)
         self._users.pop(sid, None)
         self._messages.pop(sid, None)
+        self._seen.pop(sid, None)
 
     def _username(self, sid: str, user_id) -> str:
         """Devuelve el nickname del usuario para mostrar en el chat."""
@@ -254,8 +260,23 @@ class ProtocolDispatcher:
 
     # ── dispatch ─────────────────────────────────────────────────────
 
+    def _is_dup(self, sid: str, raw: str) -> bool:
+        """Evita procesar el mismo mensaje dos veces (TCP + UDP broadcast)."""
+        import hashlib
+        h = hashlib.md5(raw.encode()).hexdigest()
+        seen = self._seen.setdefault(sid, set())
+        if h in seen:
+            return True
+        seen.add(h)
+        if len(seen) > 100:
+            seen.clear()
+        return False
+
     def dispatch(self, sid: str, raw: str):
         print(f"[dispatcher] ← RAW  {raw[:160]}")
+        if self._is_dup(sid, raw):
+            print(f"[dispatcher] Duplicado ignorado")
+            return
         try:
             frame = Protocol.parse(raw)
         except ProtocolError as e:
@@ -344,6 +365,7 @@ class ProtocolDispatcher:
             "name":          descifrar_texto(p.get("name", "")),
             "coordinatorId": p.get("coordinatorId"),
             "userIds":       p.get("userIds", []),
+            "requestIds":    p.get("requestIds", []),
         }
         print(f"[dispatcher]   SYNC sala #{room_id}: {p.get('name')}")
 
@@ -468,11 +490,20 @@ class ProtocolDispatcher:
             uname = (e.get("username") or str(uid)) if isinstance(e, dict) else (e or str(uid))
             all_users.append({"username": uname, "nickname": nick, "online": True})
 
+        # Construir lista de solicitudes pendientes
+        request_list = []
+        for req_uid in room.get("requestIds", []):
+            e = users.get(req_uid)
+            if e:
+                nick  = (e.get("nickname") or e.get("username") or str(req_uid)) if isinstance(e, dict) else str(e)
+                uname = (e.get("username") or str(req_uid)) if isinstance(e, dict) else str(e)
+                request_list.append({"username": uname, "nickname": nick})
+
         self.sio.emit("coord_data", {
             "room_id":     room_id,
             "coordinator": coord_name,
             "members":     members,
-            "requests":    [],
+            "requests":    request_list,
             "all_users":   all_users,
         }, to=sid)
 
@@ -518,17 +549,20 @@ class ProtocolDispatcher:
             if room_id is not None:
                 self._rooms.setdefault(sid, {})[room_id] = {
                     "id":            room_id,
-                    "name":          cr.get("name", ""),
+                    "name":          room_name,   # ya descifrado
                     "coordinatorId": cr.get("coordinatorId", my_id),
                     "userIds":       list(cr.get("userIds", [my_id])),
                 }
                 self._messages.setdefault(sid, {})[room_id] = []
 
-            print(f"[dispatcher] room_created #{room_id}: {cr.get('name')}")
-            # Dedup: el creador ya recibió esta sala por TCP
+            room_name = descifrar_texto(cr.get("name", ""))
+            print(f"[dispatcher] room_created #{room_id}: {room_name}")
             if not already_known:
-                self.sio.emit("room_created",
-                              {"room_id": room_id, "name": cr.get("name")}, to=sid)
+                self.sio.emit("room_created", {
+                    "room_id": room_id,
+                    "name":    room_name,
+                    "members": [self._get_plain_username(sid, my_id)],
+                }, to=sid)
         else:
             print(f"[dispatcher] room_created FAIL  payload={p}")
             self.sio.emit("room_error", {"message": "No se pudo crear la sala"}, to=sid)
@@ -595,18 +629,23 @@ class ProtocolDispatcher:
             room_id = p.get("chatRoomId")
             user_id = p.get("userId")
 
-            # Actualiza userIds en estado local
+            # Actualiza userIds y limpia requestIds en estado local
             rooms = self._rooms.get(sid, {})
             if room_id in rooms:
                 uids = rooms[room_id].get("userIds", [])
                 if user_id not in uids:
                     uids.append(user_id)
+                req_ids = rooms[room_id].get("requestIds", [])
+                if user_id in req_ids:
+                    req_ids.remove(user_id)
 
             username = self._username(sid, user_id)
+            plain_username = self._get_plain_username(sid, user_id)
             print(f"[dispatcher] user_joined sala #{room_id}: {username}")
             self.sio.emit("user_joined", {
-                "room_id":  room_id,
-                "username": username,
+                "room_id":       room_id,
+                "username":      username,
+                "plain_username": plain_username,
             }, to=sid)
 
     def _on_join_request_response(self, sid, status, p):

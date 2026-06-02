@@ -94,7 +94,7 @@ socket.on('login_success', data => {
     document.getElementById('current-user-nick').innerText = currentNickname;
     document.getElementById('welcome-nick').innerText      = `Welcome, ${currentNickname}.`;
     switchView('app-view');
-    startSimulations();
+    // startSimulations() deshabilitado — conectado a servidor real
 });
 
 socket.on('login_error', data => {
@@ -295,12 +295,28 @@ socket.on('system_event', data => {
 });
 
 socket.on('user_joined', data => {
+    // Actualizar members en lobbyData para que el sidebar refleje el cambio
+    const room = lobbyData.rooms.find(r => r.id === data.room_id);
+    if (room && data.plain_username && !room.members.includes(data.plain_username)) {
+        room.members.push(data.plain_username);
+        updateChannelList();
+    }
     if (data.room_id === activeRoom) {
         appendMsg('__SYSTEM__', `${data.username} has joined the room.`);
+    }
+    // Refrescar coord panel si está abierto
+    if (document.getElementById('modal-coord').style.display === 'block' && data.room_id === activeRoom) {
+        socket.emit('get_coord_data', { room_id: activeRoom });
     }
 });
 
 socket.on('user_left', data => {
+    // Quitar de members en lobbyData
+    const room = lobbyData.rooms.find(r => r.id === data.room_id);
+    if (room && room.members) {
+        room.members = room.members.filter(m => m !== data.username && m !== (data.plain_username || ''));
+        updateChannelList();
+    }
     if (data.room_id === activeRoom) {
         appendMsg('__SYSTEM__', `${data.username} has left the room.`);
     }
@@ -398,6 +414,17 @@ function createRoom() {
 document.getElementById('new-room-name').addEventListener('keypress', e => { if (e.key === 'Enter') createRoom(); });
 
 socket.on('room_created', data => {
+    // Agregar la sala nueva a lobbyData para que aparezca en MY CHANNELS
+    const exists = lobbyData.rooms.find(r => r.id === data.room_id);
+    if (!exists) {
+        lobbyData.rooms.push({
+            id:            data.room_id,
+            name:          data.name,
+            notifications: 0,
+            members:       data.members || [currentUser],
+        });
+    }
+    updateChannelList();
     activeRoom = data.room_id;
     socket.emit('join_chat_view', { room_id: data.room_id });
 });

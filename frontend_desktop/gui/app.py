@@ -177,16 +177,12 @@ class ChatClientGUI:
         tk.Frame(self.sidebar, bg=self.ACCENT, height=2).pack(fill="x", padx=25, pady=(0, 10))
 
         # ── PERFIL (bottom, fijo) ─────────────────────────────────
-        self.user_panel = tk.Frame(self.sidebar, bg=self.BG_SECONDARY, cursor="hand2")
+        self.user_panel = tk.Frame(self.sidebar, bg=self.BG_SECONDARY)
         self.user_panel.pack(side="bottom", fill="x", padx=15, pady=15)
         self.user_label = tk.Label(self.user_panel, text=f"● {self.nickname}",
                                    font=self.FONT_UI_BOLD, bg=self.BG_SECONDARY,
                                    fg=self.ACCENT, anchor="w", pady=10)
         self.user_label.pack(side="left", padx=15)
-        self.user_panel.bind("<Button-1>", lambda e: self.open_profile())
-        self.user_label.bind("<Button-1>", lambda e: self.open_profile())
-        self.user_panel.bind("<Enter>", lambda e: self.user_panel.config(bg="#252525"))
-        self.user_panel.bind("<Leave>", lambda e: self.user_panel.config(bg=self.BG_SECONDARY))
 
         # ── ÁREA SCROLLABLE (channels + users) ───────────────────
         scroll_container = tk.Frame(self.sidebar, bg=self.BG_DARK)
@@ -958,7 +954,7 @@ class ChatClientGUI:
             room_user_ids = set(room.get("userIds", []))
             my_id = self.network.me.get("id")
             addable = [
-                (uid, udata.get("name", f"User_{uid}"))
+                (uid, udata.get("nickname") or udata.get("name") or udata.get("username") or f"User_{uid}")
                 for uid, udata in self.network.users.items()
                 if uid not in room_user_ids
             ]
@@ -1060,9 +1056,14 @@ class ChatClientGUI:
         if self.network:
             coord_id = room.get("coordinatorId")
             display_members = [
-                (m_id, self.network.users.get(m_id, {}).get("name", f"User_{m_id}"))
+                (m_id, (
+                    self.network.users.get(m_id, {}).get("nickname")
+                    or self.network.users.get(m_id, {}).get("name")
+                    or self.network.users.get(m_id, {}).get("username")
+                    or f"User_{m_id}"
+                ))
                 for m_id in room.get("userIds", [])
-                if m_id != coord_id          # el coordinador no se patea a sí mismo
+                if m_id != coord_id
             ]
         else:
             display_members = [

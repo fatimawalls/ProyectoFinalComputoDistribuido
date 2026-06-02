@@ -1006,7 +1006,18 @@ class ChatClientGUI:
         req_frame = tk.Frame(inner, bg=self.BG_MAIN, bd=1, relief="solid")
         req_frame.pack(fill="x", padx=25, pady=5)
 
-        requests_list = [] if self.network else self.mock.requests.get(room_id, [])
+        if self.network:
+            request_ids = self.network.rooms.get(room_id, {}).get("requestIds", [])
+            requests_list = []
+            for uid in request_ids:
+                user = self.network.users.get(uid, {})
+                requests_list.append({
+                    "userId":   uid,
+                    "nickname": user.get("nickname") or user.get("name") or f"User #{uid}",
+                    "name":     user.get("name") or f"User #{uid}",
+                })
+        else:
+            requests_list = self.mock.requests.get(room_id, [])
 
         if not requests_list:
             tk.Label(req_frame, text="No hay solicitudes pendientes.", font=self.FONT_UI,
@@ -1031,7 +1042,9 @@ class ChatClientGUI:
                     self.open_coordinator_panel(room_id)
 
                 def reject_action(uid=r_id):
-                    if not self.network:
+                    if self.network:
+                        self.network.delete_join_request(room_id, int(uid))
+                    else:
                         self.mock.reject_request(room_id, uid)
                     panel.destroy()
                     self.open_coordinator_panel(room_id)

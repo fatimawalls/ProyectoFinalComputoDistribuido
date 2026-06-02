@@ -5,16 +5,24 @@ Mapea el protocolo real de chatServerJson.c / database_server.
 
 Outgoing (cliente → servidor C):
   - AUTH, CREATE_ACCOUNT, NEW_MESSAGE, NEW_CHATROOM, ADD_USER,
-    REMOVE_USER, DELETE_MESSAGE, DELETE_CHATROOM
+    REMOVE_USER, DELETE_MESSAGE, DELETE_CHATROOM, DELETE_REQUEST
 
 Incoming (servidor C → cliente):
   - AUTH_RESPONSE + SYNC (SYNC_START / CHATROOM / CHAT_USER / MESSAGE / SYNC_END)
   - NEW_MESSAGE_RESPONSE, NEW_CHATROOM_RESPONSE, ADD_USER_RESPONSE,
-    REMOVE_USER_RESPONSE, DELETE_CHATROOM_RESPONSE
-  - USER_ONLINE (broadcast UDP)
+    REMOVE_USER_RESPONSE, DELETE_CHATROOM_RESPONSE, REQUEST_RESPONSE,
+    DELETE_REQUEST_RESPONSE
+  - USER_ONLINE, USER_OFFLINE (broadcast UDP)
 """
 
 import json
+
+# Cifrado — misma llave que el desktop (CYFER_KEY en .env)
+try:
+    from cifrado import cifrar_texto, descifrar_texto
+except ImportError:
+    def cifrar_texto(t, *a): return str(t) if t is not None else ""
+    def descifrar_texto(t, *a): return str(t) if t is not None else ""
 
 FRAME_SEP = "\n"
 
@@ -26,23 +34,24 @@ FRAME_SEP = "\n"
 class Protocol:
 
     # ── Outgoing ────────────────────────────────────────────────────
-    REQ_LOGIN       = "AUTH"
-    REQ_LOGOUT      = "LOGOUT"
-    REQ_CREATE_ROOM = "NEW_CHATROOM"
-    REQ_SEND_MSG    = "NEW_MESSAGE"
-    REQ_LEAVE_ROOM  = "REMOVE_USER"
-    REQ_DELETE_ROOM = "DELETE_CHATROOM"
-    REQ_ADD_USER    = "ADD_USER"
-    REQ_JOIN_ROOM   = "REQUEST"
+    REQ_LOGIN          = "AUTH"
+    REQ_LOGOUT         = "LOGOUT"
+    REQ_CREATE_ROOM    = "NEW_CHATROOM"
+    REQ_SEND_MSG       = "NEW_MESSAGE"
+    REQ_LEAVE_ROOM     = "REMOVE_USER"
+    REQ_DELETE_ROOM    = "DELETE_CHATROOM"
+    REQ_ADD_USER       = "ADD_USER"
+    REQ_JOIN_ROOM      = "REQUEST"
+    REQ_DELETE_REQUEST = "DELETE_REQUEST"   # NUEVO: rechazar solicitud pendiente
 
     # ── Incoming: respuestas ────────────────────────────────────────
-    RES_LOGIN       = "AUTH_RESPONSE"
-    RES_CREATE_ROOM = "NEW_CHATROOM_RESPONSE"
-    RES_SEND_MSG    = "NEW_MESSAGE_RESPONSE"
-    RES_LEAVE_ROOM  = "REMOVE_USER_RESPONSE"
-    RES_DELETE_ROOM = "DELETE_CHATROOM_RESPONSE"
-    RES_ADD_USER    = "ADD_USER_RESPONSE"
-    RES_JOIN_ROOM   = "REQUEST_RESPONSE"
+    RES_LOGIN          = "AUTH_RESPONSE"
+    RES_CREATE_ROOM    = "NEW_CHATROOM_RESPONSE"
+    RES_SEND_MSG       = "NEW_MESSAGE_RESPONSE"
+    RES_LEAVE_ROOM     = "REMOVE_USER_RESPONSE"
+    RES_DELETE_ROOM    = "DELETE_CHATROOM_RESPONSE"
+    RES_ADD_USER       = "ADD_USER_RESPONSE"
+    RES_JOIN_ROOM      = "REQUEST_RESPONSE"
 
     # ── Incoming: sync inicial ──────────────────────────────────────
     SYNC_START  = "SYNC_START"
@@ -68,15 +77,22 @@ class Protocol:
     @staticmethod
     def build_login(username: str, password: str,
                     udp_port: int = 0, udp_ip: str = "") -> bytes:
-        obj = {"type": "AUTH", "username": username, "password": password}
+        obj = {"type": "AUTH", "username": cifrar_texto(username), "password": cifrar_texto(password)}
         if udp_port: obj["udpPort"] = udp_port
         if udp_ip:   obj["udpIp"]   = udp_ip
         return Protocol._flat(obj)
 
+    # ── CAMBIO 7: build_register ahora incluye nickname ──
     @staticmethod
     def build_register(username: str, password: str,
-                       udp_port: int = 0, udp_ip: str = "") -> bytes:
-        obj = {"type": "CREATE_ACCOUNT", "username": username, "password": password}
+                       udp_port: int = 0, udp_ip: str = "",
+                       nickname: str = "") -> bytes:
+        obj = {
+            "type":     "CREATE_ACCOUNT",
+            "username": cifrar_texto(username),
+            "password": cifrar_texto(password),
+            "nickname": cifrar_texto(nickname or username),
+        }
         if udp_port: obj["udpPort"] = udp_port
         if udp_ip:   obj["udpIp"]   = udp_ip
         return Protocol._flat(obj)
@@ -88,12 +104,12 @@ class Protocol:
     @staticmethod
     def build_create_room(name: str, coordinator_id: int) -> bytes:
         return Protocol._flat({"type": "NEW_CHATROOM",
-                               "name": name, "coordinatorId": coordinator_id})
+                               "name": cifrar_texto(name), "coordinatorId": coordinator_id})
 
     @staticmethod
     def build_send_msg(room_id: int, text: str, user_id: int) -> bytes:
         return Protocol._flat({"type": "NEW_MESSAGE",
-                               "text": text,
+                               "text": cifrar_texto(text),
                                "userId": user_id,
                                "chatRoomId": room_id})
 
@@ -110,6 +126,13 @@ class Protocol:
     @staticmethod
     def build_request_join(room_id: int, user_id: int) -> bytes:
         return Protocol._flat({"type": "REQUEST",
+                               "chatRoomId": room_id, "userId": user_id})
+
+    # ── CAMBIO 8: método nuevo para rechazar solicitudes pendientes ──
+    @staticmethod
+    def build_delete_request(room_id: int, user_id: int) -> bytes:
+        """Rechaza/elimina una solicitud de acceso pendiente (acción del coordinador)."""
+        return Protocol._flat({"type": "DELETE_REQUEST",
                                "chatRoomId": room_id, "userId": user_id})
 
     @staticmethod
@@ -246,11 +269,10 @@ class ProtocolDispatcher:
     def _on_login(self, sid, status, p):
         if p.get("success") == 1:
             user_id  = p.get("userId", 0)
-            username = p.get("username", "")
+            username = descifrar_texto(p.get("username", ""))
+            nickname = descifrar_texto(p.get("nickname") or p.get("username", ""))
             self._user_ids[sid] = user_id
             self._rooms[sid]    = {}
-            # Pre-carga el propio usuario para que member_names lo resuelva aunque
-            # el servidor no mande CHAT_USER para el usuario logueado
             self._users[sid]    = {user_id: username}
             self._messages[sid] = {}
             self._sync[sid]     = {
@@ -260,7 +282,7 @@ class ProtocolDispatcher:
             }
             print(f"[dispatcher] LOGIN OK → userId={user_id} username={username}")
             self.sio.emit("login_success",
-                          {"username": username, "nickname": username,
+                          {"username": username, "nickname": nickname,
                            "userId": user_id}, to=sid)
         else:
             print(f"[dispatcher] LOGIN FAIL  payload={p}")
@@ -270,8 +292,7 @@ class ProtocolDispatcher:
     def _on_register(self, sid, status, p):
         if p.get("success") == 1:
             user_id  = p.get("userId", 0)
-            username = p.get("username", "")
-            # Inicializa sesión igual que login — el C server ya está en Phase 2
+            username = descifrar_texto(p.get("username", ""))
             self._user_ids[sid] = user_id
             self._users[sid]    = {user_id: username}
             self._rooms[sid]    = {}
@@ -303,7 +324,7 @@ class ProtocolDispatcher:
         room_id = p.get("id")
         buf["rooms"][room_id] = {
             "id":            room_id,
-            "name":          p.get("name", ""),
+            "name":          descifrar_texto(p.get("name", "")),
             "coordinatorId": p.get("coordinatorId"),
             "userIds":       p.get("userIds", []),
         }
@@ -314,7 +335,7 @@ class ProtocolDispatcher:
         if buf is None:
             return
         uid  = p.get("id")
-        name = p.get("name") or p.get("username", "")
+        name = descifrar_texto(p.get("name") or p.get("username", ""))
         buf["users"][uid] = name
         print(f"[dispatcher]   SYNC usuario #{uid}: {name}")
 
@@ -325,7 +346,7 @@ class ProtocolDispatcher:
         room_id = p.get("chatRoomId")
         buf["messages"].setdefault(room_id, []).append({
             "user_id": p.get("userId"),
-            "text":    p.get("text", ""),
+            "text":    descifrar_texto(p.get("text", "")),
             "ts":      p.get("id", 0),
         })
 
@@ -482,7 +503,7 @@ class ProtocolDispatcher:
         msg     = p.get("message", p)
         user_id = msg.get("userId")
         room_id = msg.get("chatRoomId")
-        text    = msg.get("text", "")
+        text    = descifrar_texto(msg.get("text", ""))
         ts      = msg.get("id", 0)
 
         # Dedup: el remitente ya recibió el mensaje por TCP
@@ -490,7 +511,12 @@ class ProtocolDispatcher:
                for m in self._messages.get(sid, {}).get(room_id, [])):
             return
 
-        sender = self._username(sid, user_id)
+        # userId=0 → mensaje de sistema (leave_room, kick, etc.)
+        # El desktop los envía así: network.send_system_message(room_id, texto)
+        if user_id == 0:
+            sender = "__SYSTEM__"
+        else:
+            sender = self._username(sid, user_id)
 
         self._messages.setdefault(sid, {}).setdefault(room_id, []).append({
             "user_id": user_id,
@@ -569,7 +595,7 @@ class ProtocolDispatcher:
     # ── Eventos push ─────────────────────────────────────────────────
 
     def _on_user_online(self, sid, status, p):
-        username = p.get("username") or p.get("name", "")
+        username = descifrar_texto(p.get("username") or p.get("name", ""))
         user_id  = p.get("userId") or p.get("id")
 
         if user_id and sid in self._users:
@@ -581,7 +607,7 @@ class ProtocolDispatcher:
                        "userId": user_id}, to=sid)
 
     def _on_user_offline(self, sid, status, p):
-        username = p.get("username") or p.get("name", "")
+        username = descifrar_texto(p.get("username") or p.get("name", ""))
         user_id  = p.get("userId") or p.get("id")
 
         if user_id and sid in self._users:

@@ -267,19 +267,48 @@ body {
 }
 
 .sidebar li {
-    padding: 7px 5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 8px;
     cursor: pointer;
     color: var(--text-main);
-    border-radius: 2px;
-    transition: color 0.15s;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+    margin-bottom: 1px;
 }
 
-.sidebar li:hover { color: var(--accent-hover); }
+.sidebar li:hover { background-color: #222222; color: var(--accent-hover); }
 
-.sidebar li.has-notif { color: var(--text-main); font-weight: bold; }
+/* Sala de la que soy miembro — fondo azul tenue igual que desktop (#1C2340) */
+.sidebar li.is-member {
+    background-color: #1C2340;
+    color: var(--text-main);
+}
+.sidebar li.is-member:hover { background-color: #252560; }
+
+/* Sala activa seleccionada */
+.sidebar li.active-room {
+    background-color: var(--accent);
+    color: #ffffff;
+}
+.sidebar li.active-room:hover { background-color: var(--accent-hover); }
+
+/* Badge de notificaciones — igual que desktop: círculo rojo */
+.notif-badge {
+    background-color: var(--error);
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 6px;
+    border-radius: 8px;
+    min-width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
 
 /* Online list */
-#online-list li {
+#users-list li {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -303,9 +332,10 @@ body {
 .user-panel:hover { background-color: #252525; }
 
 /* Status dots */
-.status-dot { font-size: 12px; }
+.status-dot  { font-size: 12px; }
 .online-dot  { color: var(--success); }
-.offline-dot { color: var(--text-muted); }
+/* CAMBIO: offline usa rojo igual que el desktop (ERROR_COLOR = #E32222) */
+.offline-dot { color: var(--error); }
 
 /* ══════════════════════════════════
    MAIN PANEL

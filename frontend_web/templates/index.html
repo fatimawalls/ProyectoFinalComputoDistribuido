@@ -42,6 +42,10 @@
                 <div class="input-border"><input type="text" id="reg-user" autocomplete="off"></div>
             </div>
             <div class="input-group">
+                <label>DISPLAY NAME</label>
+                <div class="input-border"><input type="text" id="reg-nick" autocomplete="off"></div>
+            </div>
+            <div class="input-group">
                 <label>PASSWORD</label>
                 <div class="input-border"><input type="password" id="reg-pass"></div>
             </div>
@@ -67,18 +71,27 @@
                 <div class="divider"></div>
             </div>
 
-            <!-- Zona scrollable: channels + users -->
             <div class="sidebar-scroll">
+                <!-- MY CHANNELS -->
                 <div class="sidebar-section">
                     <div class="section-row">
-                        <span class="section-title">CHANNELS</span>
+                        <span class="section-title">MY CHANNELS</span>
                         <span class="accent-link" onclick="openModal('modal-create-room')" style="font-size:18px; line-height:1;">＋</span>
                     </div>
-                    <ul id="channel-list"></ul>
+                    <ul id="my-channel-list"></ul>
                 </div>
 
-                <div class="sidebar-section">
-                    <div class="section-title" style="margin-bottom:10px;">USERS</div>
+                <!-- OTHER CHANNELS -->
+                <div class="sidebar-section" style="margin-top:8px;">
+                    <div class="section-row">
+                        <span class="section-title">OTHER CHANNELS</span>
+                    </div>
+                    <ul id="other-channel-list"></ul>
+                </div>
+
+                <!-- CONNECTED USERS -->
+                <div class="sidebar-section" style="margin-top:8px;">
+                    <div class="section-title" style="margin-bottom:10px;">CONNECTED USERS</div>
                     <ul id="users-list"></ul>
                 </div>
             </div>

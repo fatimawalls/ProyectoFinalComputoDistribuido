@@ -1,6 +1,7 @@
 import eventlet
 eventlet.monkey_patch()
 
+import json
 import socket
 import sys
 import hashlib
@@ -8,7 +9,6 @@ import time
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
 
-# ── Importar el módulo de protocolo ─────────────────────────────────────
 from protocol import Protocol, ProtocolDispatcher, ProtocolError
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -17,26 +17,77 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 # ── Configuración por línea de comandos ─────────────────────────────────
 #
-# Uso:
+# Uso directo (sin LB):
 #   python web_server.py <C_IP> <C_PORT> [WEB_PORT] [WEB_HOST]
+#
+# Uso con Load Balancer:
+#   python web_server.py --lb <LB_IP> <LB_PORT> [WEB_PORT] [WEB_HOST]
 #
 # Ejemplos:
 #   python web_server.py 10.7.9.160 5006
-#   python web_server.py 10.7.9.160 5006 8080
-#   python web_server.py 10.7.9.160 5006 8080 127.0.0.1
+#   python web_server.py --lb 10.7.14.65 6000
+#   python web_server.py --lb 10.7.14.65 6000 5100
 #
-C_SERVER_IP   = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-C_SERVER_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 5000
-WEB_PORT      = int(sys.argv[3]) if len(sys.argv) > 3 else 5100
-WEB_HOST      = sys.argv[4]      if len(sys.argv) > 4 else "0.0.0.0"
+_args = sys.argv[1:]
+USE_LB        = False
+LB_IP         = "127.0.0.1"
+LB_PORT       = 4000
+C_SERVER_IP   = "127.0.0.1"
+C_SERVER_PORT = 5000
+WEB_PORT      = 5100
+WEB_HOST      = "0.0.0.0"
+
+if _args and _args[0] == "--lb":
+    USE_LB  = True
+    LB_IP   = _args[1] if len(_args) > 1 else "127.0.0.1"
+    LB_PORT = int(_args[2]) if len(_args) > 2 else 4000
+    WEB_PORT = int(_args[3]) if len(_args) > 3 else 5100
+    WEB_HOST = _args[4]      if len(_args) > 4 else "0.0.0.0"
+else:
+    C_SERVER_IP   = _args[0]      if len(_args) > 0 else "127.0.0.1"
+    C_SERVER_PORT = int(_args[1]) if len(_args) > 1 else 5000
+    WEB_PORT      = int(_args[2]) if len(_args) > 2 else 5100
+    WEB_HOST      = _args[3]      if len(_args) > 3 else "0.0.0.0"
 
 # Mapa sid → socket TCP al servidor C
 client_sockets: dict[str, socket.socket] = {}
 # Mapa sid → IP local usada para conectar al servidor C
 client_local_ips: dict[str, str] = {}
 
-# Dispatcher global: parsea tramas y emite eventos SocketIO
+# Dispatcher global
 dispatcher = ProtocolDispatcher(socketio)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# LOAD BALANCER
+# ════════════════════════════════════════════════════════════════════════
+
+def ask_loadbalancer(lb_ip: str, lb_port: int):
+    """
+    Consulta el Load Balancer y devuelve (ip, port) del servidor C asignado.
+    El LB responde con: {"success":1,"ip":"10.7.x.x","port":XXXX}
+    """
+    try:
+        lb_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        lb_sock.settimeout(5)
+        lb_sock.connect((lb_ip, lb_port))
+        data = b""
+        while b"\n" not in data:
+            chunk = lb_sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        lb_sock.close()
+        raw = data.decode("utf-8", errors="replace").strip()
+        print(f"[lb] Respuesta del LB: {raw}")
+        obj = json.loads(raw)
+        if obj.get("success"):
+            return obj["ip"], int(obj["port"])
+        print(f"[lb] LB sin servidor disponible: {obj}")
+        return None
+    except Exception as e:
+        print(f"[lb] Error consultando LB {lb_ip}:{lb_port} → {e}")
+        return None
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -45,8 +96,20 @@ dispatcher = ProtocolDispatcher(socketio)
 
 def connect_to_c_server(sid: str) -> bool:
     try:
+        target_ip   = C_SERVER_IP
+        target_port = C_SERVER_PORT
+
+        if USE_LB:
+            result = ask_loadbalancer(LB_IP, LB_PORT)
+            if result is None:
+                socketio.emit("server_error",
+                              {"message": "No se pudo obtener servidor desde Load Balancer."}, to=sid)
+                return False
+            target_ip, target_port = result
+            print(f"[lb] Servidor asignado: {target_ip}:{target_port}")
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((C_SERVER_IP, C_SERVER_PORT))
+        sock.connect((target_ip, target_port))
         client_sockets[sid] = sock
         client_local_ips[sid] = sock.getsockname()[0]
         socketio.start_background_task(listen_to_c_server, sid, sock)
@@ -57,7 +120,6 @@ def connect_to_c_server(sid: str) -> bool:
 
 
 def send_to_c(sid: str, data: bytes) -> bool:
-    """Envía bytes al servidor C para el cliente sid."""
     sock = client_sockets.get(sid)
     if not sock:
         socketio.emit("server_error",
@@ -72,9 +134,6 @@ def send_to_c(sid: str, data: bytes) -> bool:
 
 
 def listen_to_c_server(sid: str, sock: socket.socket):
-    """
-    Hilo por cliente: lee líneas JSON del servidor C y las despacha.
-    """
     buf = ""
     print(f"[tcp] Hilo TCP iniciado para sid={sid}")
     while True:
@@ -102,15 +161,14 @@ def listen_to_c_server(sid: str, sock: socket.socket):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# LISTENER UDP — recibe push del servidor C y reenvía a browsers
+# LISTENER UDP
 # ════════════════════════════════════════════════════════════════════════
 
 UDP_LISTEN_PORT = 5001
-_udp_seen: dict[str, float] = {}   # dedup: hash → timestamp
+_udp_seen: dict[str, float] = {}
 
 
 def _is_duplicate_udp(raw: str) -> bool:
-    """Devuelve True si este mensaje ya se procesó hace menos de 5 s."""
     h = hashlib.md5(raw.encode()).hexdigest()
     now = time.time()
     for k in list(_udp_seen.keys()):
@@ -123,14 +181,6 @@ def _is_duplicate_udp(raw: str) -> bool:
 
 
 def udp_listener():
-    """
-    Tarea de fondo: escucha en UDP_LISTEN_PORT y reenvía cada mensaje
-    a TODOS los browsers conectados via Socket.IO.
-
-    El servidor C envía un datagrama por cada usuario web registrado
-    (todos comparten el mismo IP: el de web_server.py), por eso
-    deduplicamos antes de hacer broadcast a los sids.
-    """
     try:
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -147,14 +197,9 @@ def udp_listener():
             if not raw:
                 continue
             print(f"[udp] <- {addr}  {raw[:120]!r}")
-
             if _is_duplicate_udp(raw):
-                print(f"[udp] Duplicado ignorado")
                 continue
-
-            # Reenviar a cada browser conectado
             sids = list(client_sockets.keys())
-            print(f"[udp] Reenviando a {len(sids)} cliente(s) web")
             for sid in sids:
                 try:
                     dispatcher.dispatch(sid, raw)
@@ -175,7 +220,7 @@ def index():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# EVENTOS SOCKET.IO  —  Navegador → web_server → servidor C
+# EVENTOS SOCKET.IO
 # ════════════════════════════════════════════════════════════════════════
 
 @socketio.on("connect")
@@ -199,8 +244,6 @@ def handle_disconnect():
     print(f"[web_server] Cliente web desconectado: {sid}")
 
 
-# ── Autenticación ────────────────────────────────────────────────────────
-
 @socketio.on("login")
 def handle_login(data):
     sid      = request.sid
@@ -216,18 +259,16 @@ def handle_register(data):
     sid      = request.sid
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
+    nickname = data.get("nickname", "").strip() or username
     udp_ip   = client_local_ips.get(sid, "")
-    print(f"[web_server] register sid={sid} user={username!r} udp={udp_ip}:{UDP_LISTEN_PORT}")
-    send_to_c(sid, Protocol.build_register(username, password, UDP_LISTEN_PORT, udp_ip))
+    print(f"[web_server] register sid={sid} user={username!r} nick={nickname!r} udp={udp_ip}:{UDP_LISTEN_PORT}")
+    send_to_c(sid, Protocol.build_register(username, password, UDP_LISTEN_PORT, udp_ip, nickname))
 
-
-# ── Navegación de sala ────────────────────────────────────────────────────
 
 @socketio.on("join_chat_view")
 def handle_join_chat_view(data):
     sid     = request.sid
     room_id = data.get("room_id")
-    print(f"[web_server] join_chat_view sid={sid} room={room_id}")
     if room_id is not None:
         dispatcher.handle_join_chat_view(sid, int(room_id))
 
@@ -248,14 +289,11 @@ def handle_get_members_data(data):
         dispatcher.handle_get_members_data(sid, int(room_id))
 
 
-# ── Salas ────────────────────────────────────────────────────────────────
-
 @socketio.on("create_room")
 def handle_create_room(data):
     sid  = request.sid
     name = data.get("name", "").strip()
     uid  = dispatcher.get_user_id(sid)
-    print(f"[web_server] create_room sid={sid} name={name!r} uid={uid}")
     if name and uid:
         send_to_c(sid, Protocol.build_create_room(name, uid))
 
@@ -265,7 +303,6 @@ def handle_request_join(data):
     sid     = request.sid
     uid     = dispatcher.get_user_id(sid)
     room_id = data.get("room_id")
-    print(f"[web_server] request_join sid={sid} room={room_id} uid={uid}")
     if room_id is not None and uid:
         send_to_c(sid, Protocol.build_request_join(int(room_id), uid))
 
@@ -275,12 +312,9 @@ def handle_leave_room(data):
     sid     = request.sid
     uid     = dispatcher.get_user_id(sid)
     room_id = data.get("room_id")
-    print(f"[web_server] leave_room sid={sid} room={room_id} uid={uid}")
     if room_id is not None and uid:
         send_to_c(sid, Protocol.build_leave_room(int(room_id), uid))
 
-
-# ── Chat ─────────────────────────────────────────────────────────────────
 
 @socketio.on("send_message")
 def handle_message(data):
@@ -288,12 +322,9 @@ def handle_message(data):
     uid     = dispatcher.get_user_id(sid)
     room_id = data.get("room_id")
     text    = data.get("text", "").strip()
-    print(f"[web_server] send_message sid={sid} room={room_id} uid={uid} text={text[:30]!r}")
     if room_id is not None and text and uid:
         send_to_c(sid, Protocol.build_send_msg(int(room_id), text, uid))
 
-
-# ── Coordinador ──────────────────────────────────────────────────────────
 
 @socketio.on("coord_action")
 def handle_coord_action(data):
@@ -301,7 +332,6 @@ def handle_coord_action(data):
     action      = data.get("action", "")
     room_id     = data.get("room_id")
     target_user = data.get("target_user", "")
-    print(f"[web_server] coord_action sid={sid} action={action} room={room_id} target={target_user!r}")
 
     if room_id is None:
         return
@@ -312,6 +342,8 @@ def handle_coord_action(data):
         send_to_c(sid, Protocol.build_add_user(room_id, user_id))
     elif action == "kick" and user_id:
         send_to_c(sid, Protocol.build_leave_room(room_id, user_id))
+    elif action == "reject" and user_id:
+        send_to_c(sid, Protocol.build_delete_request(room_id, user_id))
     elif not user_id:
         print(f"[web_server] coord_action: usuario {target_user!r} no encontrado")
 
@@ -320,7 +352,6 @@ def handle_coord_action(data):
 def handle_delete_room(data):
     sid     = request.sid
     room_id = data.get("room_id")
-    print(f"[web_server] delete_room sid={sid} room={room_id}")
     if room_id is not None:
         send_to_c(sid, Protocol.build_delete_room(int(room_id)))
 
@@ -330,9 +361,12 @@ def handle_delete_room(data):
 # ════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print(f"[web_server] Backend C    -> {C_SERVER_IP}:{C_SERVER_PORT}")
-    print(f"[web_server] Web listening -> http://{WEB_HOST}:{WEB_PORT}")
-    print(f"[web_server] UDP listener  -> :{UDP_LISTEN_PORT}")
+    if USE_LB:
+        print(f"[web_server] Load Balancer  -> {LB_IP}:{LB_PORT}")
+    else:
+        print(f"[web_server] Backend C      -> {C_SERVER_IP}:{C_SERVER_PORT}")
+    print(f"[web_server] Web listening  -> http://{WEB_HOST}:{WEB_PORT}")
+    print(f"[web_server] UDP listener   -> :{UDP_LISTEN_PORT}")
     socketio.start_background_task(udp_listener)
     socketio.run(app, host=WEB_HOST, port=WEB_PORT,
                  debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

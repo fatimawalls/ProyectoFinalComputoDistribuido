@@ -118,13 +118,14 @@ class AppController:
             self.login_window = None
 
         username = self.network.me.get("username", self.current_user or "")
+        nickname = self.network.me.get("nickname") or username
 
         self.root.deiconify()
 
         app = ChatClientGUI(
             self.root,
             username=username,
-            nickname=username,
+            nickname=nickname,
             network=self.network,
         )
         self._app = app

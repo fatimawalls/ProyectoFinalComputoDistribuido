@@ -37,11 +37,7 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/lib
  /* ============================================================
     LOGGER
     ============================================================ */
-#define LOG(fmt, ...)                    \
-    do {                                 \
-        printf(fmt "\n", ##_VA_ARGS_); \
-        fflush(stdout);                  \
-    } while (0)
+#define LOG(fmt, ...) do { printf(fmt "\n", ##__VA_ARGS__); fflush(stdout); } while(0)
 
     /* ============================================================
        CONSTANTES

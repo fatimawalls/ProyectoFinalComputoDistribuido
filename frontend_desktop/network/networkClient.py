@@ -64,6 +64,8 @@ import json
 import socket
 import threading
 
+from cifrado import cifrar_texto, descifrar_texto
+
 ENCODING = "utf-8"
 
 
@@ -73,11 +75,6 @@ class NetworkClient:
         self.connected  = False
         self._buf       = ""          # buffer TCP parcial
         self._sync_lock = threading.Event()  # se setea al terminar el sync
-
-        # UDP callback info reported to chatServerJson after TCP connects.
-        self.udp_socket = None
-        self.udp_ip     = ""
-        self.udp_port   = 0
 
         # ── Estado en memoria ────────────────────────────────────
         self.me       = {}            # {"id": int, "username": str}
@@ -100,40 +97,44 @@ class NetworkClient:
         self.on_message_deleted   = None  # (room_id, message_id)
         self.on_room_deleted      = None  # (room_id)
         self.on_user_online       = None  # (user_id, username)
+        self.on_user_offline      = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
+        self.on_all_users_loaded  = None  # ()
+        self.on_all_rooms_loaded  = None  # ()
         
 
     # ═══════════════════════════════════════════════════════════════
     # CONEXIÓN
     # ═══════════════════════════════════════════════════════════════
-
-    def ask_loadbalancer(self, lb_ip: str = "127.0.0.1", lb_port: int = 4000) -> tuple[str, int] | None:
-        """
-        Pregunta al Load Balancer qué chatServer usar.
-
-        El LB responde:
-            {"success":1,"ip":"...","port":5006}
-
-        Returns:
-            (ip, port) si hay servidor disponible, None si falla.
-        """
+    def ask_loadbalancer(self, lb_ip="127.0.0.1", lb_port=4000):
         print(f"[LB] Consultando load balancer {lb_ip}:{lb_port}...")
+
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as lb_socket:
                 lb_socket.settimeout(5)
-                lb_socket.connect((lb_ip, lb_port))
+                lb_socket.connect((lb_ip, int(lb_port)))
 
                 data = b""
+
                 while b"\n" not in data:
                     chunk = lb_socket.recv(4096)
+
                     if not chunk:
                         break
+
                     data += chunk
 
             raw = data.decode(ENCODING, errors="replace").strip()
-            print(f"[LB] Respuesta: {raw}")
+
+            print(f"[LB] RAW BYTES = {data}")
+            print(f"[LB] RAW RECV  = [{raw}]")
+
+            if not raw:
+                print("[LB] Respuesta vacía. Revisa que estés conectando al load balancer correcto.")
+                return None
 
             obj = json.loads(raw)
+
             if not obj.get("success"):
                 print(f"[LB] Sin servidor disponible: {obj.get('error', 'error desconocido')}")
                 return None
@@ -168,39 +169,33 @@ class NetworkClient:
             return local_ip
         except Exception:
             return "127.0.0.1"
-
     def connect(self, ip="127.0.0.1", port=5000) -> bool:
-        """Abre el socket TCP y prepara el socket UDP para eventos push."""
+        """Abre el socket TCP y el socket UDP de escucha."""
         print(f"[RED] Conectando a {ip}:{port}...")
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((ip, port))
             self.connected = True
             print("[RED] ¡Conexión TCP establecida!")
+            threading.Thread(target=self._listen_loop, daemon=True).start()
 
-            # UDP push listener.
-            # Puerto dinámico para permitir varios clientes en la misma máquina.
+            # --- NUEVO: HILO PARA ESCUCHAR BROADCASTS UDP ---
             try:
                 self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # IMPORTANTE: Permite que varios clientes en la misma PC escuchen el 5001
                 self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, "SO_REUSEPORT"):
+                if hasattr(socket, 'SO_REUSEPORT'):
                     self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-
-                self.udp_socket.bind(("", 0))
-                self.udp_port = self.udp_socket.getsockname()[1]
-                self.udp_ip = self._guess_udp_ip(ip)
-
+                
+                # Escuchamos en el puerto 5001 (en todas las interfaces "")
+                self.udp_socket.bind(("", 5001))
                 threading.Thread(target=self._udp_listen_loop, daemon=True).start()
-                print(f"[RED-UDP] Escuchando en {self.udp_ip}:{self.udp_port}")
+                print("[RED] ¡Escuchando Broadcasts UDP en el puerto 5001!")
             except Exception as udp_e:
                 print(f"[RED] Advertencia UDP: No se pudo iniciar la escucha: {udp_e}")
-                self.udp_socket = None
-                self.udp_ip = ""
-                self.udp_port = 0
+            # ------------------------------------------------
 
-            threading.Thread(target=self._listen_loop, daemon=True).start()
             return True
-
         except Exception as e:
             print(f"[RED] Error al conectar: {e}")
             self.connected = False
@@ -254,72 +249,54 @@ class NetworkClient:
         except Exception as e:
             print(f"[RED] Error al enviar: {e}")
 
-    def _is_notify_target(self, obj: dict) -> bool:
-        """
-        True only when this client should show a visual notification.
-
-        Important:
-        - Broadcasts may be received by all connected clients.
-        - notifyUsers decides who should see toast/badge/system UI feedback.
-        - If notifyUsers is missing, we do NOT show visual notifications by default.
-        """
-        my_id = self.me.get("id")
-        notify_users = obj.get("notifyUsers", [])
-
-        if my_id is None or not isinstance(notify_users, list):
-            return False
-
-        return my_id in notify_users
+    def _get_udp_endpoint(self):
+        """Devuelve (ip, port) del socket UDP local, para enviarlo al servidor en AUTH."""
+        udp_ip = self._guess_udp_ip("")
+        udp_port = 5001
+        try:
+            if hasattr(self, 'udp_socket') and self.udp_socket:
+                udp_port = self.udp_socket.getsockname()[1]
+        except Exception:
+            pass
+        return udp_ip, udp_port
 
     def login(self, username: str, password: str):
-        """Envía AUTH al servidor."""
+        """Envía AUTH al servidor con username y password cifrados."""
+        udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
             "type":     "AUTH",
-            "username": username,
-            "password": password,
-            "udpIp":    self.udp_ip,
-            "udpPort":  self.udp_port,
+            "username": cifrar_texto(username),
+            "password": cifrar_texto(password),
+            "udpIp":    udp_ip,
+            "udpPort":  udp_port,
         })
 
-    def register(self, username: str, password: str, nickname: str | None = None):
-        """Envía CREATE_ACCOUNT al servidor."""
+    def register(self, username: str, password: str, nickname: str = None):
+        """Envía CREATE_ACCOUNT al servidor con campos cifrados."""
+        udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
-            "type":     "CREATE_ACCOUNT",
-            "username": username,
-            "password": password,
-            "nickname": nickname or username,
-            "udpIp":    self.udp_ip,
-            "udpPort":  self.udp_port,
+            "type":      "CREATE_ACCOUNT",
+            "username":  cifrar_texto(username),
+            "password":  cifrar_texto(password),
+            "nickname":  cifrar_texto(nickname or username),
+            "udpIp":     udp_ip,
+            "udpPort":   udp_port,
         })
 
-    def send_message(self, room_id: int, text: str, user_id: int | None = None):
-        """Envía NEW_MESSAGE. El servidor actualiza la DB y hace broadcast."""
+    def send_message(self, room_id: int, text: str):
+        """Envía NEW_MESSAGE con texto cifrado."""
         self._send({
             "type":       "NEW_MESSAGE",
-            "text":       text,
-            "userId":     self.me.get("id") if user_id is None else user_id,
+            "text":       cifrar_texto(text),
+            "userId":     self.me.get("id"),
             "chatRoomId": room_id,
         })
 
-    def send_system_message(self, room_id: int, text: str):
-        """
-        Guarda un mensaje de sistema en la BD.
-
-        Convention:
-        - userId = 0 means SYSTEM.
-        - The GUI renders it with the same system-message style.
-        """
-        self.send_message(
-            room_id,
-            text,
-            user_id=0
-        )
-
     def create_room(self, name: str):
-        """Crea una sala nueva. El coordinador es el usuario actual."""
+        """Crea una sala nueva con nombre cifrado."""
         self._send({
             "type":          "NEW_CHATROOM",
-            "name":          name,
+            "name":          cifrar_texto(name),
             "coordinatorId": self.me.get("id"),
         })
 
@@ -368,6 +345,32 @@ class NetworkClient:
             "type":       "DELETE_CHATROOM",
             "chatRoomId": room_id,
         })
+
+    def request_join_room(self, room_id: int):
+        """Solicita acceso a una sala privada."""
+        self._send({
+            "type": "REQUEST",
+            "chatRoomId": room_id,
+            "userId": self.me.get("id"),
+        })
+
+    def delete_join_request(self, room_id: int, user_id: int):
+        """Rechaza/elimina una solicitud pendiente de acceso."""
+        self._send({
+            "type": "DELETE_REQUEST",
+            "chatRoomId": room_id,
+            "userId": user_id,
+        })
+
+    def send_system_message(self, room_id: int, text: str):
+        """Envía mensaje persistente de sistema usando userId=0, con texto cifrado."""
+        self._send({
+            "type":       "NEW_MESSAGE",
+            "text":       cifrar_texto(text),
+            "userId":     0,
+            "chatRoomId": room_id,
+        })
+
 
     # ═══════════════════════════════════════════════════════════════
     # ACCESORES DE CONVENIENCIA (lectura del estado en memoria)
@@ -484,7 +487,10 @@ class NetworkClient:
             "DELETE_REQUEST_RESPONSE":  self._on_delete_request_response,
             "DELETE_MESSAGE_RESPONSE":  self._on_delete_message_response,
             "DELETE_CHATROOM_RESPONSE": self._on_delete_chatroom_response,
-            "USER_ONLINE":              self._on_user_online,  # ← Mapeo del evento dinámico
+            "REQUEST_RESPONSE":         self._on_request_response,
+            "DELETE_REQUEST_RESPONSE":  self._on_delete_request_response,
+            "USER_ONLINE":              self._on_user_online,
+            "USER_OFFLINE":             self._on_user_offline,
           
         }
 
@@ -495,16 +501,160 @@ class NetworkClient:
             print(f"[RED] Tipo desconocido: {msg_type}")
 
     # ═══════════════════════════════════════════════════════════════
+    # HELPERS DE ESTADO LOCAL
+    # ═══════════════════════════════════════════════════════════════
+
+    def _display_name_from_user(self, user: dict) -> str:
+        return (
+            user.get("nickname")
+            or user.get("name")
+            or user.get("username")
+            or str(user.get("id", "?"))
+        )
+
+    def _upsert_user(self, data: dict, online=None):
+        if not data:
+            return None
+
+        user_id = data.get("id") or data.get("userId")
+        if user_id is None:
+            return None
+
+        existing = self.users.get(user_id, {"id": user_id})
+
+        username = data.get("username")
+        if username is None:
+            username = data.get("name")
+
+        nickname = data.get("nickname")
+        if nickname is None:
+            nickname = data.get("name") or username
+
+        if username is not None:
+            username = descifrar_texto(username)
+        if nickname is not None:
+            nickname = descifrar_texto(nickname)
+
+        existing["id"] = user_id
+
+        if username is not None:
+            existing["username"] = username
+
+        if nickname is not None:
+            existing["nickname"] = nickname
+            existing["name"] = nickname
+        elif username is not None and not existing.get("name"):
+            existing["name"] = username
+
+        if online is not None:
+            existing["online"] = bool(online)
+        else:
+            existing.setdefault("online", False)
+
+        self.users[user_id] = existing
+        return existing
+
+    def _normalize_room(self, cr: dict):
+        if not cr:
+            return None
+
+        room_id = cr.get("id") or cr.get("chatRoomId")
+        if room_id is None:
+            return None
+
+        existing = self.rooms.get(room_id, {})
+
+        user_ids = list(cr.get("userIds", existing.get("userIds", [])))
+        coordinator_id = cr.get("coordinatorId", existing.get("coordinatorId"))
+
+        if coordinator_id is not None and coordinator_id not in user_ids:
+            user_ids.append(coordinator_id)
+
+        return {
+            "id":            room_id,
+            "name":          descifrar_texto(cr.get("name", existing.get("name", ""))),
+            "coordinatorId": coordinator_id,
+            "userIds":       user_ids,
+            "messageIds":    list(cr.get("messageIds", existing.get("messageIds", []))),
+            "requestIds":    list(cr.get("requestIds", existing.get("requestIds", []))),
+            "notifications": existing.get("notifications", 0),
+        }
+
+    def _upsert_room(self, cr: dict):
+        room = self._normalize_room(cr)
+
+        if not room:
+            return None
+
+        self.rooms[room["id"]] = room
+        self.messages.setdefault(room["id"], [])
+        return room
+
+    def _append_message_once(self, msg: dict) -> bool:
+        """
+        Agrega el mensaje solo si no existe todavía.
+        Devuelve True si fue nuevo y False si era duplicado.
+        """
+        if not msg:
+            return False
+
+        room_id = msg.get("chatRoomId")
+        msg_id = msg.get("id")
+
+        if room_id is None or msg_id is None:
+            return False
+
+        room_messages = self.messages.setdefault(room_id, [])
+
+        for existing in room_messages:
+            if existing.get("id") == msg_id:
+                return False
+
+        room_messages.append(msg)
+
+        room = self.rooms.get(room_id)
+        if room is not None:
+            message_ids = room.setdefault("messageIds", [])
+            if msg_id not in message_ids:
+                message_ids.append(msg_id)
+
+        return True
+
+    def _should_notify_ui(self, obj: dict) -> bool:
+        """
+        El broadcast puede llegar a todos.
+        notifyUsers solo decide si esta GUI debe mostrar popup/badge/callback visual.
+        Si notifyUsers no viene, permitimos el callback para respuestas TCP directas.
+        """
+        notify_users = obj.get("notifyUsers")
+
+        if not isinstance(notify_users, list):
+            return True
+
+        return self.me.get("id") in notify_users
+
+
+    # ═══════════════════════════════════════════════════════════════
     # HANDLERS — AUTH
     # ═══════════════════════════════════════════════════════════════
 
     def _on_auth_response(self, obj: dict):
         success = bool(obj.get("success"))
         if success:
+            user = self._upsert_user(
+                {
+                    "id":       obj.get("userId"),
+                    "username": obj.get("username", ""),
+                    "nickname": obj.get("nickname") or obj.get("username", ""),
+                },
+                online=True
+            )
             self.me = {
-                "id":       obj.get("userId"),
-                "username": obj.get("username", ""),
+                "id":       user["id"],
+                "username": user.get("username", ""),
+                "nickname": user.get("nickname", ""),
             }
+
             print(f"[RED] Login OK → id={self.me['id']} username={self.me['username']}")
             if self.on_login_response:
                 self.on_login_response(True, "Login correcto")
@@ -514,9 +664,9 @@ class NetworkClient:
                 self.on_login_response(False, "Credenciales incorrectas")
 
     def _on_register_response(self, obj: dict):
-        success = bool(obj.get("success"))
+        success  = bool(obj.get("success"))
         user_id  = obj.get("userId", -1)
-        username = obj.get("username", "")
+        username = descifrar_texto(obj.get("username", ""))
         print(f"[RED] Register {'OK' if success else 'FAIL'}")
         if self.on_register_response:
             self.on_register_response(success, user_id, username)
@@ -536,40 +686,39 @@ class NetworkClient:
     def _on_sync_chatroom(self, obj: dict):
         if not self._syncing:
             return
-        room_id = obj["id"]
-        self.rooms[room_id] = {
-            "id":            room_id,
-            "name":          obj.get("name", ""),
-            "coordinatorId": obj.get("coordinatorId"),
-            "userIds":       list(obj.get("userIds", [])),
-        }
-        if room_id not in self.messages:
-            self.messages[room_id] = []
-        self._current_sync_room = room_id
-        print(f"[RED]   SYNC sala #{room_id}: {obj.get('name')}")
+
+        room = self._upsert_room(obj)
+
+        if not room:
+            return
+
+        self._current_sync_room = room["id"]
+        print(f"[RED]   SYNC sala #{room['id']}: {room.get('name')}")
 
     def _on_sync_chat_user(self, obj: dict):
         if not self._syncing:
             return
-        user_id = obj["id"]
-        self.users[user_id] = {
-            "id":   user_id,
-            "name": obj.get("name", ""),
-        }
-        print(f"[RED]   SYNC usuario #{user_id}: {obj.get('name')}")
+
+        user = self._upsert_user(obj, online=obj.get("online", False))
+
+        if user:
+            print(f"[RED]   SYNC usuario #{user['id']}: {self._display_name_from_user(user)}")
 
     def _on_sync_message(self, obj: dict):
-        if not self._syncing or self._current_sync_room is None:
+        if not self._syncing:
             return
+
         room_id = obj.get("chatRoomId", self._current_sync_room)
+
         msg = {
-            "id":         obj["id"],
+            "id":         obj.get("id"),
             "userId":     obj.get("userId"),
             "chatRoomId": room_id,
-            "text":       obj.get("text", ""),
+            "text":       descifrar_texto(obj.get("text", "")),
         }
-        self.messages.setdefault(room_id, []).append(msg)
-        print(f"[RED]   SYNC mensaje #{msg['id']} en sala #{room_id}")
+
+        if self._append_message_once(msg):
+            print(f"[RED]   SYNC mensaje #{msg['id']} en sala #{room_id}")
 
     def _on_sync_end(self, obj: dict):
         self._syncing           = False
@@ -588,75 +737,87 @@ class NetworkClient:
 
     def _on_user_online(self, obj: dict):
         """
-        Llega como un evento push dinámico cuando un usuario inicia sesión 
-        o se registra de forma global en la plataforma.
+        Evento push cuando un usuario se conecta o se registra.
         """
-        user_id = obj.get("userId")
-        username = obj.get("username")
-        
-        if user_id and username:
-            # Lo agregamos al diccionario global de usuarios si no está registrado previamente
-            if user_id not in self.users:
-                self.users[user_id] = {"id": user_id, "name": username}
-                print(f"[RED] Nuevo usuario conectado/registrado en el server: {username} (#{user_id})")
-            
-            # Disparamos el callback hacia el Controlador de la Interfaz
+        user_id  = obj.get("userId") or obj.get("id")
+        username = obj.get("username") or obj.get("name", "")
+        nickname = obj.get("nickname") or username
+
+        if user_id:
+            user = self._upsert_user(
+                {
+                    "id": user_id,
+                    "username": username,
+                    "nickname": nickname,
+                },
+                online=True
+            )
+
+            print(f"[RED] Usuario online: {self._display_name_from_user(user)} (#{user_id})")
+
             if self.on_user_online:
-                self.on_user_online(user_id, username)
+                self.on_user_online(user_id, self._display_name_from_user(user))
+
+    def _on_user_offline(self, obj: dict):
+        """
+        Evento push cuando un usuario se desconecta.
+        """
+        user_id  = obj.get("userId") or obj.get("id")
+        username = obj.get("username") or obj.get("name", "")
+        nickname = obj.get("nickname") or username
+
+        if user_id:
+            user = self._upsert_user(
+                {
+                    "id": user_id,
+                    "username": username,
+                    "nickname": nickname,
+                },
+                online=False
+            )
+
+            print(f"[RED] Usuario offline: {self._display_name_from_user(user)} (#{user_id})")
+
+            if self.on_user_offline:
+                self.on_user_offline(user_id, self._display_name_from_user(user))
 
     def _on_new_message_response(self, obj: dict):
         if not obj.get("success"):
             return
 
         msg_data = obj.get("message", {})
-        room_id = msg_data.get("chatRoomId")
+        room_id  = msg_data.get("chatRoomId")
 
         msg = {
             "id":         msg_data.get("id"),
             "userId":     msg_data.get("userId"),
             "chatRoomId": room_id,
-            "text":       msg_data.get("text", ""),
+            "text":       descifrar_texto(msg_data.get("text", "")),
         }
 
-        # Avoid duplicates when the same event arrives via TCP response and UDP broadcast.
-        room_messages = self.messages.setdefault(room_id, [])
-        if not any(existing.get("id") == msg["id"] for existing in room_messages):
-            room_messages.append(msg)
+        was_new = self._append_message_once(msg)
+
+        if not was_new:
+            print(f"[RED] Mensaje duplicado ignorado #{msg.get('id')} en sala #{room_id}")
+            return
 
         print(f"[RED] Nuevo mensaje #{msg['id']} en sala #{room_id}")
 
-        # Only users included in notifyUsers show UI notification/toast.
-        if self.on_new_message and self._is_notify_target(obj):
+        if self.on_new_message and self._should_notify_ui(obj):
             self.on_new_message(room_id, msg)
 
     def _on_new_chatroom_response(self, obj: dict):
         if not obj.get("success"):
             return
 
-        cr = obj.get("chatRoom", {})
-        room_id = cr.get("id")
-        coordinator_id = cr.get("coordinatorId")
+        room = self._upsert_room(obj.get("chatRoom", {}))
 
-        user_ids = list(cr.get("userIds", []))
-        if coordinator_id and coordinator_id not in user_ids:
-            user_ids.append(coordinator_id)
+        if not room:
+            return
 
-        room = {
-            "id":            room_id,
-            "name":          cr.get("name", ""),
-            "coordinatorId": coordinator_id,
-            "userIds":       user_ids,
-            "messageIds":    list(cr.get("messageIds", [])),
-            "requestIds":    list(cr.get("requestIds", [])),
-        }
+        print(f"[RED] Sala #{room['id']} actualizada/creada: {room['name']}")
 
-        self.rooms[room_id] = room
-        self.messages.setdefault(room_id, [])
-
-        print(f"[RED] Sala nueva/actualizada #{room_id}: {room['name']}")
-
-        # Room creation changes global state, so every client can refresh the sidebar.
-        if self.on_room_created:
+        if self.on_room_created and self._should_notify_ui(obj):
             self.on_room_created(room)
 
     def _on_add_user_response(self, obj: dict):
@@ -667,34 +828,26 @@ class NetworkClient:
         user_id = obj.get("userId")
         chat_user = obj.get("chatUser", {})
 
-        if user_id and chat_user:
-            self.users[user_id] = {
-                "id":       user_id,
-                "name":     chat_user.get("nickname") or chat_user.get("username", ""),
-                "username": chat_user.get("username", ""),
-                "nickname": chat_user.get("nickname") or chat_user.get("username", ""),
-            }
+        if chat_user:
+            chat_user = dict(chat_user)
+            chat_user.setdefault("id", user_id)
+            self._upsert_user(chat_user)
 
-        cr = obj.get("chatRoom")
-        if cr:
-            room_id = cr.get("id", room_id)
-            self.rooms[room_id] = {
-                "id":            room_id,
-                "name":          cr.get("name", ""),
-                "coordinatorId": cr.get("coordinatorId"),
-                "userIds":       list(cr.get("userIds", [])),
-                "messageIds":    list(cr.get("messageIds", [])),
-                "requestIds":    list(cr.get("requestIds", [])),
-            }
+        if obj.get("chatRoom"):
+            self._upsert_room(obj.get("chatRoom"))
         else:
             room = self.rooms.get(room_id)
-            if room and user_id and user_id not in room.get("userIds", []):
-                room.setdefault("userIds", []).append(user_id)
+
+            if room and user_id:
+                if user_id not in room.setdefault("userIds", []):
+                    room["userIds"].append(user_id)
+
+                if user_id in room.setdefault("requestIds", []):
+                    room["requestIds"].remove(user_id)
 
         print(f"[RED] Usuario #{user_id} agregado a sala #{room_id}")
 
-        # This callback refreshes UI. System text is persisted separately as userId=0 message.
-        if self.on_user_added:
+        if self.on_user_added and self._should_notify_ui(obj):
             self.on_user_added(room_id, self.users.get(user_id, {"id": user_id}))
 
     def _on_remove_user_response(self, obj: dict):
@@ -704,27 +857,58 @@ class NetworkClient:
         room_id = obj.get("chatRoomId")
         user_id = obj.get("userId")
 
-        cr = obj.get("chatRoom")
-        if cr:
-            room_id = cr.get("id", room_id)
-            self.rooms[room_id] = {
-                "id":            room_id,
-                "name":          cr.get("name", ""),
-                "coordinatorId": cr.get("coordinatorId"),
-                "userIds":       list(cr.get("userIds", [])),
-                "messageIds":    list(cr.get("messageIds", [])),
-                "requestIds":    list(cr.get("requestIds", [])),
-            }
+        if obj.get("chatRoom"):
+            self._upsert_room(obj.get("chatRoom"))
         else:
             room = self.rooms.get(room_id)
+
             if room and user_id in room.get("userIds", []):
                 room["userIds"].remove(user_id)
 
         print(f"[RED] Usuario #{user_id} removido de sala #{room_id}")
 
-        # This callback refreshes UI. System text is persisted separately as userId=0 message.
-        if self.on_user_removed:
+        if self.on_user_removed and self._should_notify_ui(obj):
             self.on_user_removed(room_id, user_id)
+
+    def _on_request_response(self, obj: dict):
+        if not obj.get("success"):
+            return
+
+        room = self._upsert_room(obj.get("chatRoom", {}))
+        user_id = obj.get("userId")
+
+        if not room:
+            room_id = obj.get("chatRoomId")
+            room = self.rooms.get(room_id)
+
+            if room and user_id not in room.setdefault("requestIds", []):
+                room["requestIds"].append(user_id)
+
+        room_id = room.get("id") if room else obj.get("chatRoomId")
+        print(f"[RED] Request de usuario #{user_id} registrado en sala #{room_id}")
+
+        if self.on_room_created and self._should_notify_ui(obj):
+            self.on_room_created(room)
+
+    def _on_delete_request_response(self, obj: dict):
+        if not obj.get("success"):
+            return
+
+        room = self._upsert_room(obj.get("chatRoom", {}))
+        user_id = obj.get("userId")
+
+        if not room:
+            room_id = obj.get("chatRoomId")
+            room = self.rooms.get(room_id)
+
+            if room and user_id in room.get("requestIds", []):
+                room["requestIds"].remove(user_id)
+
+        room_id = room.get("id") if room else obj.get("chatRoomId")
+        print(f"[RED] Request de usuario #{user_id} eliminado de sala #{room_id}")
+
+        if self.on_room_created and self._should_notify_ui(obj):
+            self.on_room_created(room)
 
     def _on_delete_message_response(self, obj: dict):
         if not obj.get("success"):
@@ -768,17 +952,13 @@ class NetworkClient:
         }
         self._send(payload)
 
-    def delete_message(self, message_id: int):
-        payload = {
-            "type": "DELETE_MESSAGE",
-            "messageId": message_id
-        }
-        self._send(payload)
-
     def create_account(self, username, password):
+        udp_ip, udp_port = self._get_udp_endpoint()
         payload = {
-            "type": "CREATE_ACCOUNT",
-            "username": username,
-            "password": password
+            "type":     "CREATE_ACCOUNT",
+            "username": cifrar_texto(username),
+            "password": cifrar_texto(password),
+            "udpIp":    udp_ip,
+            "udpPort":  udp_port,
         }
         self._send(payload)

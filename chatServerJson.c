@@ -1,8 +1,8 @@
 ﻿/*
  * chatServerJson.c — Servidor de chat (proxy al database_server)
- 
 
-gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServerJson
+
+gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread hiredis/libhiredis.a -o chatServerJson
 
 
  *
@@ -31,27 +31,26 @@ gcc chatServerJson.c database/libs/cJSON.c -Idatabase/libs -lpthread -o chatServ
 #include <sys/mman.h>
 #include <ifaddrs.h>
 #include <errno.h>
-
 #include "cJSON.h"
+#include "hiredis/hiredis.h"
 
-/* ============================================================
-   LOGGER
-   ============================================================ */
-#define LOG(fmt, ...)                    \
-    do {                                 \
-        printf(fmt "\n", ##__VA_ARGS__); \
-        fflush(stdout);                  \
-    } while (0)
+ /* ============================================================
+    LOGGER
+    ============================================================ */
+#define LOG(fmt, ...) do { printf(fmt "\n", ##__VA_ARGS__); fflush(stdout); } while(0)
 
-/* ============================================================
-   CONSTANTES
-   ============================================================ */
-#define TCP_PORT      5006
+    /* ============================================================
+       CONSTANTES
+       ============================================================ */
+#define TCP_PORT      5000
 #define UDP_PORT      5001
 #define DB_HOST       "172.18.2.3"
 #define DB_PORT       8080
 #define MAX_USERS     64
 #define BUFSIZE       65536
+
+#define redisIP       "10.7.2.119"
+#define redisPORT     6379
 
 char g_db_host[256] = DB_HOST;
 int  g_db_port = DB_PORT;
@@ -72,47 +71,51 @@ int  g_lb_udp_port = 4001;
    ============================================================ */
 static void report_load_balancer(const char* event)
 {
-    if (g_lb_host[0] == '\0')
+    if (g_lb_host[0] == '\0') {
+        LOG("[LB-REPORT] SKIP — lb_host no configurado (pasa lb_ip como arg 3)");
         return;
+    }
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0)
+    if (fd < 0) {
+        LOG("[LB-REPORT] ERROR — no se pudo crear socket UDP: %s", strerror(errno));
         return;
+    }
+
+    /* Bind al UDP_PORT fijo para que el LB vea src_port=5001 y pueda
+       hacer coincidir el paquete con el ServerEntry correcto en su tabla */
+    struct sockaddr_in local;
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = INADDR_ANY;
+    local.sin_port = htons(UDP_PORT);
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (bind(fd, (struct sockaddr*)&local, sizeof(local)) < 0)
+        LOG("[LB-REPORT] WARN — bind a UDP_PORT %d fallo (%s), usando efimero",
+            UDP_PORT, strerror(errno));
 
     struct sockaddr_in lb;
     memset(&lb, 0, sizeof(lb));
     lb.sin_family = AF_INET;
     lb.sin_port = htons(g_lb_udp_port);
-
     if (inet_aton(g_lb_host, &lb.sin_addr) == 0) {
+        LOG("[LB-REPORT] ERROR — IP del LB invalida: '%s'", g_lb_host);
         close(fd);
         return;
     }
 
     char payload[128];
-    snprintf(
-        payload,
-        sizeof(payload),
-        "{\"event\":\"%s\",\"port\":%d}",
-        event,
-        UDP_PORT
-    );
+    snprintf(payload, sizeof(payload),
+        "{\"event\":\"%s\",\"port\":%d}", event, UDP_PORT);
 
-    sendto(
-        fd,
-        payload,
-        strlen(payload),
-        0,
-        (struct sockaddr*)&lb,
-        sizeof(lb)
-    );
-
-    LOG("[LB-REPORT] %s → %s:%d payload=%s",
-        event,
-        g_lb_host,
-        g_lb_udp_port,
-        payload
-    );
+    int sent = sendto(fd, payload, strlen(payload), 0,
+        (struct sockaddr*)&lb, sizeof(lb));
+    if (sent < 0)
+        LOG("[LB-REPORT] ERROR — sendto fallo: %s", strerror(errno));
+    else
+        LOG("[LB-REPORT] OK — event=%s -> %s:%d payload=%s",
+            event, g_lb_host, g_lb_udp_port, payload);
 
     close(fd);
 }
@@ -191,11 +194,11 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
     {
         struct sockaddr_in bcast;
         memset(&bcast, 0, sizeof(bcast));
-        bcast.sin_family      = AF_INET;
-        bcast.sin_port        = htons(UDP_PORT);
+        bcast.sin_family = AF_INET;
+        bcast.sin_port = htons(UDP_PORT);
         bcast.sin_addr.s_addr = inet_addr("255.255.255.255");
         sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-               (struct sockaddr*)&bcast, sizeof(bcast));
+            (struct sockaddr*)&bcast, sizeof(bcast));
         LOG("[UDP-BROADCAST] ✅ %d bytes → 255.255.255.255:%d  tipo=%s",
             len, UDP_PORT, json_str);
     }
@@ -220,10 +223,10 @@ static void udp_broadcast_all(const char* json_str, int skip_uid)
         struct sockaddr_in dest;
         memset(&dest, 0, sizeof(dest));
         dest.sin_family = AF_INET;
-        dest.sin_port   = htons(active[i].udp_port);
+        dest.sin_port = htons(active[i].udp_port);
         inet_aton(active[i].udp_ip, &dest.sin_addr);
         int r = sendto(g_udp_sd, buf, len, MSG_DONTWAIT,
-                       (struct sockaddr*)&dest, sizeof(dest));
+            (struct sockaddr*)&dest, sizeof(dest));
         LOG("[UDP-UNICAST] ✅ %d bytes → uid=%d %s:%d",
             r, active[i].db_user_id, active[i].udp_ip, active[i].udp_port);
     }
@@ -249,6 +252,41 @@ static void udp_notify_user(int db_user_id, const char* json_str)
     pthread_mutex_unlock(&g_state->lock);
 }
 
+
+/* ============================================================
+   REDIS SUBSCRIBER — Escucha actualizaciones de otros servidores
+   ============================================================ */
+static void* redis_subscriber_thread(void* arg) {
+    // Conectar al Redis central (cambia la IP si Redis está en otro contenedor/máquina)
+    redisContext* sub = redisConnect(redisIP, redisPORT);
+    if (!sub || sub->err) {
+        LOG("[REDIS] Error al conectar el suscriptor: %s", sub ? sub->errstr : "OOM");
+        return NULL;
+    }
+
+    LOG("[REDIS] Suscriptor conectado exitosamente. Escuchando 'chat_updates'...");
+    redisCommand(sub, "SUBSCRIBE chat_updates");
+
+    redisReply* reply;
+    while (redisGetReply(sub, (void**)&reply) == REDIS_OK) {
+        // hiredis devuelve arrays para los mensajes de Pub/Sub
+        // reply->element[0] = "message"
+        // reply->element[1] = nombre del canal ("chat_updates")
+        // reply->element[2] = el contenido del mensaje (el JSON)
+        if (reply->type == REDIS_REPLY_ARRAY && reply->elements == 3) {
+            if (reply->element[2]->str) {
+                LOG("[REDIS] Mensaje recibido de otro server. Repartiendo localmente...");
+                // Usamos skip_uid = -1 para que le llegue a TODOS los locales
+                udp_broadcast_all(reply->element[2]->str, -1);
+            }
+        }
+        freeReplyObject(reply);
+    }
+
+    redisFree(sub);
+    return NULL;
+}
+
 /* ============================================================
    on_data_change()
    ============================================================ */
@@ -257,12 +295,12 @@ static void on_data_change(const char* resp_json, int sender_uid)
     cJSON* obj = cJSON_Parse(resp_json);
     if (!obj) return;
 
-    cJSON* jtype   = cJSON_GetObjectItem(obj, "type");
+    cJSON* jtype = cJSON_GetObjectItem(obj, "type");
     cJSON* jsuccess = cJSON_GetObjectItem(obj, "success");
 
     if (!cJSON_IsString(jtype)) { cJSON_Delete(obj); return; }
 
-    const char* type    = jtype->valuestring;
+    const char* type = jtype->valuestring;
     int         success = cJSON_IsNumber(jsuccess) ? jsuccess->valueint : 0;
 
     LOG("[ON_DATA_CHANGE] tipo=%s success=%d", type, success);
@@ -281,8 +319,25 @@ static void on_data_change(const char* resp_json, int sender_uid)
     if (strcmp(type, "REQUEST_RESPONSE") == 0)         broadcast = 1;
     if (strcmp(type, "DELETE_REQUEST_RESPONSE") == 0)  broadcast = 1;
 
-    if (broadcast)
+    if (broadcast) {
+        // 1. Notifica a los clientes locales de este servidor
         udp_broadcast_all(resp_json, sender_uid);
+
+        // 2. NUEVO: Publica a todo el ecosistema vía Redis
+
+        // 👇 AQUÍ ESTÁ LA CORRECCIÓN: Agregar "redisContext *pub = " 👇
+        redisContext* pub = redisConnect(redisIP, redisPORT);
+
+        if (pub && !pub->err) {
+            redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", resp_json);
+            if (reply) freeReplyObject(reply);
+            redisFree(pub);
+        }
+        else {
+            LOG("[REDIS] Fallo al publicar el evento en Redis");
+            if (pub) redisFree(pub);
+        }
+    }
 
     cJSON_Delete(obj);
 }
@@ -292,26 +347,51 @@ static void on_data_change(const char* resp_json, int sender_uid)
    ============================================================ */
 static void broadcast_user_online(int user_id, const char* username)
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) { perror("broadcast socket"); return; }
-
-    int on = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(UDP_PORT);
-    addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}\n",
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
         user_id, username);
-    sendto(sock, buf, strlen(buf), 0,
-        (struct sockaddr*)&addr, sizeof(addr));
+
+    /* Unicast a cada cliente registrado + broadcast fallback */
+    udp_broadcast_all(buf, user_id);
+
+    /* Publicar a Redis para que otros servidores notifiquen a sus clientes */
+    redisContext* pub = redisConnect(redisIP, redisPORT);
+    if (pub && !pub->err) {
+        redisReply* reply = redisCommand(pub, "PUBLISH chat_updates %s", buf);
+        if (reply) freeReplyObject(reply);
+        redisFree(pub);
+    } else {
+        LOG("[REDIS] Fallo al publicar USER_ONLINE");
+        if (pub) redisFree(pub);
+    }
+
     LOG("[UDP BROADCAST USER_ONLINE] uid=%d username=%s", user_id, username);
-    close(sock);
+}
+
+/* Envía USER_ONLINE por TCP al cliente recién conectado, uno por cada usuario activo.
+   Se usa el mismo socket TCP para garantizar orden: llegan justo después de SYNC_END. */
+static void notify_existing_online_users(int sock, int skip_uid)
+{
+    pthread_mutex_lock(&g_state->lock);
+    ShmUser active[MAX_USERS];
+    int count = 0;
+    for (int i = 0; i < MAX_USERS; i++) {
+        ShmUser* u = &g_state->users[i];
+        if (u->active && u->db_user_id != skip_uid)
+            active[count++] = *u;
+    }
+    pthread_mutex_unlock(&g_state->lock);
+
+    for (int i = 0; i < count; i++) {
+        char buf[512];
+        snprintf(buf, sizeof(buf),
+            "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
+            active[i].db_user_id, active[i].username);
+        send_line(sock, buf);
+        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s -> nuevo cliente (sock=%d)",
+            active[i].db_user_id, active[i].username, sock);
+    }
 }
 
 /* ============================================================
@@ -371,7 +451,7 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
             strncpy(g_state->users[i].udp_ip, ip,
-                    sizeof(g_state->users[i].udp_ip) - 1);
+                sizeof(g_state->users[i].udp_ip) - 1);
             g_state->users[i].udp_port = port;
             LOG("[SHM] Reconexión uid=%d ip=%s port=%d", uid, ip, port);
             pthread_mutex_unlock(&g_state->lock);
@@ -384,10 +464,10 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
             ShmUser* su = &g_state->users[i];
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
-            su->active     = 1;
-            su->udp_port   = port;
+            su->active = 1;
+            su->udp_port = port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip,   ip,    sizeof(su->udp_ip)   - 1);
+            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
             g_state->user_count++;
             LOG("[SHM] Registrado uid=%d username=%s ip=%s port=%d slot=%d",
                 uid, uname, ip, port, i);
@@ -417,9 +497,9 @@ static void shm_unregister_user(int uid)
    Si no vienen en el JSON, usa client_ip y UDP_PORT como fallback.
    ============================================================ */
 static void extract_udp_info(cJSON* req, const char* client_ip,
-                              char* out_ip, int ip_size, int* out_port)
+    char* out_ip, int ip_size, int* out_port)
 {
-    cJSON* judp_ip   = cJSON_GetObjectItem(req, "udpIp");
+    cJSON* judp_ip = cJSON_GetObjectItem(req, "udpIp");
     cJSON* judp_port = cJSON_GetObjectItem(req, "udpPort");
 
     /* IP: usar la que el cliente reportó si viene y no es vacía */
@@ -486,7 +566,7 @@ static void atender_cliente(int sock, const char* client_ip)
                             if (ju) uid = ju->valueint;
                             if (jn && jn->valuestring)
                                 strncpy(username, jn->valuestring,
-                                        sizeof(username) - 1);
+                                    sizeof(username) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -496,13 +576,14 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");
                 LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
+                notify_existing_online_users(sock, uid);
                 cJSON_Delete(req);
                 break;
             }
@@ -542,13 +623,14 @@ static void atender_cliente(int sock, const char* client_ip)
             if (ok && uid > 0) {
                 /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
                 char reg_ip[64] = "";
-                int  reg_port   = UDP_PORT;
+                int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
                 shm_register_user(uid, username, reg_ip, reg_port);
                 report_load_balancer("connect");
                 LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d",
                     uid, username, reg_ip, reg_port);
                 broadcast_user_online(uid, username);
+                notify_existing_online_users(sock, uid);
             }
             else {
                 uid = -1;
@@ -716,13 +798,25 @@ int main(int argc, char* argv[])
     LOG(" Puerto TCP       : %d", TCP_PORT);
     LOG(" Puerto UDP       : %d  (onDataChange broadcast)", UDP_PORT);
     LOG(" Database         : %s:%d", g_db_host, g_db_port);
-    LOG(" udpIp/udpPort    : leídos del JSON de AUTH/CREATE_ACCOUNT");
-    LOG(" LB reporting      : %s", g_lb_host[0] ? "ON" : "OFF");
+    LOG(" LB reporting     : %s", g_lb_host[0] ? "ON" : "OFF");
+    if (g_lb_host[0] != '\0')
+        LOG(" LB destino       : %s:%d", g_lb_host, g_lb_udp_port);
+    LOG("--------------------------------------------------");
+    LOG(" CONFIGURA en loadBalancer.c g_servers_template:");
+    LOG("   int_ip  = \"%s\"", realIP);
+    LOG("   int_port= %d  (TCP)", TCP_PORT);
+    LOG("   udp_port= %d  (debe coincidir con UDP_PORT)", UDP_PORT);
     LOG("==================================================");
 
     /* ============================================================
     LOOP PRINCIPAL DE CONEXIONES (en el main de chatServerJson.c
     ============================================================ */
+
+    // Iniciar el hilo de Redis en segundo plano
+    pthread_t t_redis;
+    pthread_create(&t_redis, NULL, redis_subscriber_thread, NULL);
+    pthread_detach(t_redis);
+
     while (1) {
         struct sockaddr_in ca;
         socklen_t clen = sizeof(ca);

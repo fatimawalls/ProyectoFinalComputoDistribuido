@@ -1,5 +1,5 @@
 # Environment variables
-.env
+
 
 # Python
 __pycache__/
@@ -8,9 +8,7 @@ __pycache__/
 *.pyd
 
 # Virtual environments
-venv/
-.venv/
-env/
+
 
 # VS Code
 .vscode/

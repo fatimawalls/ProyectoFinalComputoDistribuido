@@ -5,7 +5,7 @@ from gui.views import LoginView, RegisterView
 from gui.app import ChatClientGUI
 from network.networkClient import NetworkClient
 
-# Valores por defecto de respaldo
+# ── Valores por defecto ───────────────────────────────────────────────
 C_SERVER_IP   = "127.0.0.1"
 C_SERVER_PORT = 5006
 
@@ -28,8 +28,18 @@ class AppController:
         self.network = NetworkClient()
         self.current_user = None
 
-        # ── Guardamos los parámetros dinámicos de conexión ────────────
-        self.server_ip = server_ip
+        # ── NUEVAS LÍNEAS AGREGADAS AQUÍ ──────────────────────────────
+        # Guardamos la IP y Puerto en el propio AppController
+        self.lb_ip   = lb_ip
+        self.lb_port = lb_port
+
+        # También se las dejamos configuradas al networkClient por si acaso
+        self.network.lb_ip   = lb_ip
+        self.network.lb_port = lb_port
+        # ──────────────────────────────────────────────────────────────
+
+        # Parámetros dinámicos de conexión (fallback si el LB no responde)
+        self.server_ip   = server_ip
         self.server_port = server_port
         self.use_load_balancer = use_load_balancer
         self.lb_ip = lb_ip
@@ -41,11 +51,11 @@ class AppController:
         # Guard: evita que show_lobby se ejecute más de una vez por sesión
         self._lobby_shown = False
 
-        # ── Ventana raíz ÚNICA — vive toda la sesión ─────────────────
+        # Ventana raíz única — vive toda la sesión
         self.root = tk.Tk()
-        self.root.withdraw()          # Invisible hasta que haya algo que mostrar
+        self.root.withdraw()
 
-        # Callbacks de autenticación y ciclo de vida de la red
+        # Callbacks de autenticación y ciclo de vida
         self.network.on_login_response      = self.on_login_response_received
         self.network.on_register_response   = self.on_register_response_received
         self.network.on_sync_complete       = self.on_sync_complete_received
@@ -55,19 +65,18 @@ class AppController:
         self.network.on_user_offline        = self.on_user_offline_received
 
     # ─────────────────────────────────────────────────────────────
-    # ARRANQUE DEL CONTROLLER
+    # ARRANQUE
     # ─────────────────────────────────────────────────────────────
 
     def run(self):
         self.show_login()
-        self.root.mainloop()   # ← UN SOLO mainloop en toda la aplicación
+        self.root.mainloop()
 
     # ─────────────────────────────────────────────────────────────
     # NAVEGACIÓN ENTRE VENTANAS
     # ─────────────────────────────────────────────────────────────
 
     def show_login(self):
-        # Cerrar registro si estaba abierto
         if self.register_window:
             try:
                 self.register_window.destroy()
@@ -82,7 +91,6 @@ class AppController:
         )
 
     def show_register(self):
-        # Cerrar login si estaba abierto
         if self.login_window:
             try:
                 self.login_window.destroy()
@@ -97,13 +105,11 @@ class AppController:
         )
 
     def show_lobby(self):
-        # Guard: si el lobby ya fue construido, ignorar llamadas duplicadas
         if self._lobby_shown:
-            print("[CONTROLADOR] show_lobby ignorado — lobby ya activo (sync duplicado del servidor)")
+            print("[CONTROLADOR] show_lobby ignorado — lobby ya activo")
             return
         self._lobby_shown = True
 
-        # Cerrar login si aún existe activo
         if self.login_window:
             try:
                 self.login_window.destroy()
@@ -113,7 +119,6 @@ class AppController:
 
         username = self.network.me.get("username", self.current_user or "")
 
-        # Reutilizamos la ventana raíz principal de Tkinter para el lobby
         self.root.deiconify()
 
         app = ChatClientGUI(
@@ -122,8 +127,6 @@ class AppController:
             nickname=username,
             network=self.network,
         )
-
-        # Guardar la referencia a la GUI para refrescos asíncronos
         self._app = app
 
         # Conectar callbacks en tiempo real de mensajería hacia la GUI
@@ -137,7 +140,7 @@ class AppController:
         self.network.on_user_offline        = self.on_user_offline_received
 
     # ─────────────────────────────────────────────────────────────
-    # PETICIONES Y CONEXIÓN DE RED (MÉTODOS INTERNOS)
+    # CONEXIÓN DE RED
     # ─────────────────────────────────────────────────────────────
 
     def _conectar(self) -> bool:
@@ -200,7 +203,7 @@ class AppController:
         print(f"[CONTROLADOR] CREATE_ACCOUNT enviado para '{user}' con nickname '{nick or user}'.")
 
     # ─────────────────────────────────────────────────────────────
-    # CALLBACKS ASÍNCRONOS (Hilos de Red ──> .after() ──> Hilo Principal GUI)
+    # CALLBACKS ASÍNCRONOS
     # ─────────────────────────────────────────────────────────────
 
     def on_login_response_received(self, success, message):
@@ -232,15 +235,18 @@ class AppController:
         self.root.after(0, self._try_open_lobby)
 
     def _try_open_lobby(self):
-        """Abre el lobby de la app sólo cuando ambas listas están cargadas."""
         if self._lobby_shown:
-            if hasattr(self, '_app') and self._app is not None:
+            if hasattr(self, "_app") and self._app is not None:
                 try:
                     self._app.refresh_sidebar()
                 except Exception:
                     pass
             return
         self.show_lobby()
+        # Los USER_ONLINE de usuarios ya conectados llegan por TCP justo después
+        # del SYNC_END. Damos un tick extra para que el hilo TCP los procese
+        # antes de pintar el sidebar definitivo.
+        self.root.after(150, self._safe_refresh_sidebar)
 
     def on_register_response_received(self, success, user_id, username):
         self.root.after(0, lambda: self._safe_handle_register_ui(success, user_id, username))
@@ -273,16 +279,13 @@ class AppController:
     # ─────────────────────────────────────────────────────────────
 
     def on_user_online_received(self, user_id, username):
-        """Notificación push cuando un usuario se conecta en red."""
         self.root.after(0, self._safe_refresh_sidebar)
 
     def on_user_offline_received(self, user_id, username):
-        """Notificación push cuando un usuario se desconecta."""
         self.root.after(0, self._safe_refresh_sidebar)
 
     def _safe_refresh_sidebar(self):
-        """Refresca de manera segura el sidebar de la GUI si está activo."""
-        if hasattr(self, '_app') and self._app is not None:
+        if hasattr(self, "_app") and self._app is not None:
             try:
                 self._app.refresh_sidebar()
             except Exception as e:
@@ -294,14 +297,15 @@ class AppController:
             0,
             lambda: messagebox.showerror(
                 "Conexión perdida",
-                "Se perdió la conexión con el servidor de chat.\nPor favor, reinicia la aplicación.",
+                "Se perdió la conexión con el servidor de chat.\n"
+                "Por favor, reinicia la aplicación.",
                 parent=self.root,
             ),
         )
 
 
 # ─────────────────────────────────────────────────────────────
-# BLOQUE PRINCIPAL DE EJECUCIÓN (ENTRY POINT)
+# ENTRY POINT
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     server_ip = C_SERVER_IP

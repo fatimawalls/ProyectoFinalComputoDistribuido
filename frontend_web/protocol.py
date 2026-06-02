@@ -320,13 +320,19 @@ class ProtocolDispatcher:
     def _on_sync_start(self, sid, status, p):
         my_id    = self._user_ids.get(sid, 0)
         my_name  = self._users.get(sid, {}).get(my_id, "")
-        my_entry = {"username": my_name, "nickname": my_name} if my_id else None
+        raw = self._users.get(sid, {}).get(my_id)
+        if isinstance(raw, dict):
+            my_username = raw.get("username", "")
+            my_nickname = raw.get("nickname", "")
+        else:
+            my_username = raw or ""
+            my_nickname = raw or ""
         self._sync[sid] = {
             "rooms":    {},
-            "users":    {my_id: my_entry} if my_id and my_entry else {},
+            "users":    {my_id: {"username": my_username, "nickname": my_nickname}} if my_id else {},
             "messages": {},
         }
-        print(f"[dispatcher] SYNC_START (my_id={my_id} my_name={my_name!r})")
+        print(f"[dispatcher] SYNC_START (my_id={my_id} my_name={my_username!r})")
 
     def _on_sync_room(self, sid, status, p):
         buf = self._sync.get(sid)
@@ -349,7 +355,7 @@ class ProtocolDispatcher:
         username = descifrar_texto(p.get("username") or p.get("name", ""))
         nickname = descifrar_texto(p.get("nickname") or p.get("name") or p.get("username", ""))
         buf["users"][uid] = {"username": username, "nickname": nickname}
-        print(f"[dispatcher]   SYNC usuario #{uid}: {name}")
+        print(f"[dispatcher]   SYNC usuario #{uid}: {nickname}")
 
     def _on_sync_msg(self, sid, status, p):
         buf = self._sync.get(sid)

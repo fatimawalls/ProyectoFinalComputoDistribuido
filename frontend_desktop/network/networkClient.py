@@ -531,25 +531,27 @@ class NetworkClient:
         if username is None:
             username = data.get("name")
 
-        nickname = data.get("nickname")
-        if nickname is None:
-            nickname = data.get("name") or username
+        # nickname explícito: solo el que viene en el mensaje, sin fallback a username.
+        # Esto evita sobreescribir el nickname real (guardado en el sync) cuando
+        # USER_ONLINE/OFFLINE no trae el campo.
+        nickname_raw = data.get("nickname")
 
         if username is not None:
             username = descifrar_texto(username)
-        if nickname is not None:
-            nickname = descifrar_texto(nickname)
+        if nickname_raw is not None:
+            nickname_raw = descifrar_texto(nickname_raw)
 
         existing["id"] = user_id
 
         if username is not None:
             existing["username"] = username
 
-        if nickname is not None:
-            existing["nickname"] = nickname
-            existing["name"] = nickname
-        elif username is not None and not existing.get("name"):
-            existing["name"] = username
+        if nickname_raw is not None:
+            existing["nickname"] = nickname_raw
+            existing["name"]     = nickname_raw
+        elif not existing.get("nickname") and username is not None:
+            # Solo usar username como nombre si nunca hubo un nickname real
+            existing.setdefault("name", username)
 
         if online is not None:
             existing["online"] = bool(online)

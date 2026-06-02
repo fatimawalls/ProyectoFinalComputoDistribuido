@@ -126,6 +126,7 @@ static void report_load_balancer(const char* event)
 typedef struct {
     int  db_user_id;
     char username[64];
+    char nickname[64];
     int  active;
     char udp_ip[64];
     int  udp_port;
@@ -345,12 +346,12 @@ static void on_data_change(const char* resp_json, int sender_uid)
 /* ============================================================
    broadcast_user_online
    ============================================================ */
-static void broadcast_user_online(int user_id, const char* username)
+static void broadcast_user_online(int user_id, const char* username, const char* nickname)
 {
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
-        user_id, username);
+        "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
+        user_id, username, nickname[0] ? nickname : username);
 
     /* Unicast a cada cliente registrado + broadcast fallback */
     udp_broadcast_all(buf, user_id);
@@ -372,12 +373,12 @@ static void broadcast_user_online(int user_id, const char* username)
 /* ============================================================
    broadcast_user_offline
    ============================================================ */
-static void broadcast_user_offline(int user_id, const char* username)
+static void broadcast_user_offline(int user_id, const char* username, const char* nickname)
 {
     char buf[512];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\"}",
-        user_id, username);
+        "{\"type\":\"USER_OFFLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
+        user_id, username, nickname[0] ? nickname : username);
 
     udp_broadcast_all(buf, user_id);
 
@@ -409,13 +410,14 @@ static void notify_existing_online_users(int sock, int skip_uid)
     pthread_mutex_unlock(&g_state->lock);
 
     for (int i = 0; i < count; i++) {
+        const char* nick = active[i].nickname[0] ? active[i].nickname : active[i].username;
         char buf[512];
         snprintf(buf, sizeof(buf),
-            "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\"}",
-            active[i].db_user_id, active[i].username);
+            "{\"type\":\"USER_ONLINE\",\"userId\":%d,\"username\":\"%s\",\"nickname\":\"%s\"}",
+            active[i].db_user_id, active[i].username, nick);
         send_line(sock, buf);
-        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s -> nuevo cliente (sock=%d)",
-            active[i].db_user_id, active[i].username, sock);
+        LOG("[TCP-NOTIFY-EXISTING] uid=%d %s (%s) -> nuevo cliente (sock=%d)",
+            active[i].db_user_id, active[i].username, nick, sock);
     }
 }
 
@@ -469,16 +471,17 @@ static int db_request(const char* req_json, char* out_buf, int out_size)
    de asumir siempre UDP_PORT. Esto permite usar el puerto
    efímero que el cliente Python reporta en el JSON de AUTH.
    ============================================================ */
-static void shm_register_user(int uid, const char* uname, const char* ip, int port)
+static void shm_register_user(int uid, const char* uname, const char* nick,
+                              const char* ip, int port)
 {
     pthread_mutex_lock(&g_state->lock);
-    /* Reconexión — actualizar IP y puerto */
+    /* Reconexión — actualizar nickname, IP y puerto */
     for (int i = 0; i < MAX_USERS; i++) {
         if (g_state->users[i].active && g_state->users[i].db_user_id == uid) {
-            strncpy(g_state->users[i].udp_ip, ip,
-                sizeof(g_state->users[i].udp_ip) - 1);
+            strncpy(g_state->users[i].udp_ip,  ip,   sizeof(g_state->users[i].udp_ip)  - 1);
+            strncpy(g_state->users[i].nickname, nick, sizeof(g_state->users[i].nickname) - 1);
             g_state->users[i].udp_port = port;
-            LOG("[SHM] Reconexión uid=%d ip=%s port=%d", uid, ip, port);
+            LOG("[SHM] Reconexión uid=%d ip=%s port=%d nick=%s", uid, ip, port, nick);
             pthread_mutex_unlock(&g_state->lock);
             return;
         }
@@ -489,13 +492,14 @@ static void shm_register_user(int uid, const char* uname, const char* ip, int po
             ShmUser* su = &g_state->users[i];
             memset(su, 0, sizeof(ShmUser));
             su->db_user_id = uid;
-            su->active = 1;
-            su->udp_port = port;
+            su->active     = 1;
+            su->udp_port   = port;
             strncpy(su->username, uname, sizeof(su->username) - 1);
-            strncpy(su->udp_ip, ip, sizeof(su->udp_ip) - 1);
+            strncpy(su->nickname, nick,  sizeof(su->nickname) - 1);
+            strncpy(su->udp_ip,   ip,    sizeof(su->udp_ip)   - 1);
             g_state->user_count++;
-            LOG("[SHM] Registrado uid=%d username=%s ip=%s port=%d slot=%d",
-                uid, uname, ip, port, i);
+            LOG("[SHM] Registrado uid=%d username=%s nick=%s ip=%s port=%d slot=%d",
+                uid, uname, nick, ip, port, i);
             break;
         }
     }
@@ -553,6 +557,7 @@ static void atender_cliente(int sock, const char* client_ip)
     char resp_buf[BUFSIZE];
     int  uid = -1;
     char username[64] = "";
+    char nickname[64] = "";
 
     LOG("[HIJO] Atendiendo cliente desde IP: %s", client_ip);
 
@@ -587,12 +592,14 @@ static void atender_cliente(int sock, const char* client_ip)
                         cJSON* js = cJSON_GetObjectItem(j, "success");
                         if (cJSON_IsNumber(js) && js->valueint) {
                             ok = 1;
-                            cJSON* ju = cJSON_GetObjectItem(j, "userId");
-                            cJSON* jn = cJSON_GetObjectItem(j, "username");
+                            cJSON* ju  = cJSON_GetObjectItem(j, "userId");
+                            cJSON* jn  = cJSON_GetObjectItem(j, "username");
+                            cJSON* jnk = cJSON_GetObjectItem(j, "nickname");
                             if (ju) uid = ju->valueint;
-                            if (jn && jn->valuestring)
-                                strncpy(username, jn->valuestring,
-                                    sizeof(username) - 1);
+                            if (jn  && jn->valuestring)
+                                strncpy(username, jn->valuestring,  sizeof(username) - 1);
+                            if (jnk && jnk->valuestring)
+                                strncpy(nickname, jnk->valuestring, sizeof(nickname) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -600,15 +607,15 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
+                if (!nickname[0]) strncpy(nickname, username, sizeof(nickname) - 1);
                 char reg_ip[64] = "";
                 int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
-                shm_register_user(uid, username, reg_ip, reg_port);
+                shm_register_user(uid, username, nickname, reg_ip, reg_port);
                 report_load_balancer("connect");
-                LOG("[HIJO-CREATE-OK] uid=%d user=%s udp=%s:%d",
-                    uid, username, reg_ip, reg_port);
-                broadcast_user_online(uid, username);
+                LOG("[HIJO-CREATE-OK] uid=%d user=%s nick=%s udp=%s:%d",
+                    uid, username, nickname, reg_ip, reg_port);
+                broadcast_user_online(uid, username, nickname);
                 notify_existing_online_users(sock, uid);
                 cJSON_Delete(req);
                 break;
@@ -629,17 +636,19 @@ static void atender_cliente(int sock, const char* client_ip)
                     send_line(sock, line);
                     cJSON* j = cJSON_Parse(line);
                     if (j) {
-                        cJSON* jt = cJSON_GetObjectItem(j, "type");
-                        cJSON* js = cJSON_GetObjectItem(j, "success");
+                        cJSON* jt  = cJSON_GetObjectItem(j, "type");
+                        cJSON* js  = cJSON_GetObjectItem(j, "success");
                         if (cJSON_IsString(jt) &&
                             strcmp(jt->valuestring, "AUTH_RESPONSE") == 0 &&
                             cJSON_IsNumber(js) && js->valueint) {
                             ok = 1;
-                            cJSON* ju = cJSON_GetObjectItem(j, "userId");
-                            cJSON* jn = cJSON_GetObjectItem(j, "username");
+                            cJSON* ju  = cJSON_GetObjectItem(j, "userId");
+                            cJSON* jn  = cJSON_GetObjectItem(j, "username");
+                            cJSON* jnk = cJSON_GetObjectItem(j, "nickname");
                             uid = ju ? ju->valueint : -1;
-                            strncpy(username, jn ? jn->valuestring : "",
-                                sizeof(username) - 1);
+                            strncpy(username, jn  ? jn->valuestring  : "", sizeof(username) - 1);
+                            if (jnk && jnk->valuestring)
+                                strncpy(nickname, jnk->valuestring, sizeof(nickname) - 1);
                         }
                         cJSON_Delete(j);
                     }
@@ -647,15 +656,15 @@ static void atender_cliente(int sock, const char* client_ip)
                 line = strtok(NULL, "\n");
             }
             if (ok && uid > 0) {
-                /* CORRECCIÓN: leer udpIp/udpPort del JSON del cliente */
+                if (!nickname[0]) strncpy(nickname, username, sizeof(nickname) - 1);
                 char reg_ip[64] = "";
                 int  reg_port = UDP_PORT;
                 extract_udp_info(req, client_ip, reg_ip, sizeof(reg_ip), &reg_port);
-                shm_register_user(uid, username, reg_ip, reg_port);
+                shm_register_user(uid, username, nickname, reg_ip, reg_port);
                 report_load_balancer("connect");
-                LOG("[HIJO-AUTH-OK] uid=%d user=%s udp=%s:%d",
-                    uid, username, reg_ip, reg_port);
-                broadcast_user_online(uid, username);
+                LOG("[HIJO-AUTH-OK] uid=%d user=%s nick=%s udp=%s:%d",
+                    uid, username, nickname, reg_ip, reg_port);
+                broadcast_user_online(uid, username, nickname);
                 notify_existing_online_users(sock, uid);
             }
             else {
@@ -697,7 +706,7 @@ static void atender_cliente(int sock, const char* client_ip)
     }
 
     if (uid > 0) {
-        broadcast_user_offline(uid, username);
+        broadcast_user_offline(uid, username, nickname);
         report_load_balancer("disconnect");
     }
 

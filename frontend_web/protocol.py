@@ -216,7 +216,9 @@ class ProtocolDispatcher:
             Protocol.RES_DELETE_ROOM: self._on_delete_room,
             Protocol.RES_JOIN_ROOM:        self._on_join_request_response,
             "JOIN_REQUEST_RESPONSE":       self._on_join_request_response,
-            "DELETE_REQUEST_RESPONSE":     self._on_join_request_response,
+            "REQUEST_NOTIFICATION":        self._on_request_notification,
+            "DELETE_REQUEST_RESPONSE":     self._on_delete_request_response,
+            "DELETE_REQUEST_NOTIFICATION": self._on_delete_request_response,
             Protocol.EVT_USER_ONLINE:  self._on_user_online,
             Protocol.EVT_USER_OFFLINE: self._on_user_offline,
         }
@@ -651,11 +653,77 @@ class ProtocolDispatcher:
     def _on_join_request_response(self, sid, status, p):
         success = p.get("success") == 1
         room_id = p.get("chatRoomId")
+        user_id = p.get("userId")
+
+        # Actualiza requestIds en estado local si el servidor confirma la solicitud
+        if success and room_id and user_id:
+            room = self._rooms.get(sid, {}).get(room_id)
+            if room and user_id not in room.get("requestIds", []):
+                room.setdefault("requestIds", []).append(user_id)
+
         print(f"[dispatcher] JOIN_REQUEST_RESPONSE sala #{room_id} success={success}")
         self.sio.emit("join_request_response", {
             "room_id": room_id,
             "success": success,
         }, to=sid)
+
+    def _on_request_notification(self, sid, status, p):
+        """Llega al coordinador cuando alguien solicita unirse a su sala."""
+        if p.get("success") != 1:
+            return
+
+        room_id = p.get("chatRoomId")
+        user_id = p.get("userId")
+
+        # Sincronizar estado completo si el servidor manda el chatRoom actualizado
+        chat_room_data = p.get("chatRoom")
+        room = self._rooms.get(sid, {}).get(room_id)
+        if chat_room_data and room:
+            room["requestIds"] = list(chat_room_data.get("requestIds", room.get("requestIds", [])))
+            room["userIds"]    = list(chat_room_data.get("userIds",    room.get("userIds", [])))
+        elif room and user_id and user_id not in room.get("requestIds", []):
+            room.setdefault("requestIds", []).append(user_id)
+
+        # Resolver nombre del solicitante
+        requester_nick     = str(user_id or "")
+        requester_username = str(user_id or "")
+        if user_id:
+            entry = self._users.get(sid, {}).get(user_id)
+            if isinstance(entry, dict):
+                requester_nick     = entry.get("nickname") or entry.get("username") or requester_nick
+                requester_username = entry.get("username") or requester_username
+            elif entry:
+                requester_nick = requester_username = str(entry)
+
+        count = len(room.get("requestIds", [])) if room else 0
+        print(f"[dispatcher] REQUEST_NOTIFICATION sala #{room_id} user={user_id} pending={count}")
+        self.sio.emit("new_join_request", {
+            "room_id":  room_id,
+            "user_id":  user_id,
+            "nickname": requester_nick,
+            "username": requester_username,
+            "count":    count,
+        }, to=sid)
+
+    def _on_delete_request_response(self, sid, status, p):
+        """Respuesta/notificación al rechazar una solicitud pendiente."""
+        if p.get("success") != 1:
+            return
+
+        room_id = p.get("chatRoomId")
+        user_id = p.get("userId")
+
+        # Limpiar del estado local
+        chat_room_data = p.get("chatRoom")
+        room = self._rooms.get(sid, {}).get(room_id)
+        if chat_room_data and room:
+            room["requestIds"] = list(chat_room_data.get("requestIds", []))
+        elif room and user_id:
+            req_ids = room.get("requestIds", [])
+            if user_id in req_ids:
+                req_ids.remove(user_id)
+
+        print(f"[dispatcher] DELETE_REQUEST_RESPONSE sala #{room_id} user={user_id}")
 
     def _on_delete_room(self, sid, status, p):
         room_id = p.get("chatRoomId")

@@ -386,6 +386,20 @@ socket.on('join_request_response', data => {
     }
 });
 
+socket.on('new_join_request', data => {
+    // Actualizar badge del botón Manage Room
+    const btn = document.getElementById('btn-manage');
+    if (btn && data.room_id === activeRoom && isCoordinator) {
+        btn.innerText = `⚙ Manage Room  [${data.count}]`;
+    }
+
+    // Si el panel de coordinador está abierto para esta sala, refrescarlo
+    const coordModal = document.getElementById('modal-coord');
+    if (coordModal && coordModal.style.display === 'block' && data.room_id === activeRoom) {
+        socket.emit('get_coord_data', { room_id: activeRoom });
+    }
+});
+
 function leaveRoom() {
     if (!activeRoom) return;
     customConfirm('LEAVE ROOM', 'Are you sure you want to leave this room?', () => {
@@ -442,6 +456,8 @@ function openCoordPanel() {
     if (!activeRoom) return;
     socket.emit('get_coord_data', { room_id: activeRoom });
     openModal('modal-coord');
+    const btn = document.getElementById('btn-manage');
+    if (btn) btn.innerText = '⚙ Manage Room';
 }
 
 socket.on('coord_data', data => {

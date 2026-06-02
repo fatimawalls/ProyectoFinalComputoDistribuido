@@ -353,6 +353,14 @@ def handle_coord_action(data):
         print(f"[web_server] coord_action: usuario {target_user!r} no encontrado")
 
 
+@socketio.on("delete_message")
+def handle_delete_message(data):
+    sid        = request.sid
+    message_id = data.get("message_id")
+    if message_id is not None:
+        send_to_c(sid, Protocol.build_delete_message(int(message_id)))
+
+
 @socketio.on("delete_room")
 def handle_delete_room(data):
     sid     = request.sid

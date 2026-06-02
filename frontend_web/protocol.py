@@ -136,6 +136,10 @@ class Protocol:
                                "chatRoomId": room_id, "userId": user_id})
 
     @staticmethod
+    def build_delete_message(message_id: int) -> bytes:
+        return Protocol._flat({"type": "DELETE_MESSAGE", "messageId": message_id})
+
+    @staticmethod
     def build_delete_room(room_id: int) -> bytes:
         return Protocol._flat({"type": "DELETE_CHATROOM", "chatRoomId": room_id})
 
@@ -209,17 +213,21 @@ class ProtocolDispatcher:
             Protocol.SYNC_USER:       self._on_sync_user,
             Protocol.SYNC_MSG:        self._on_sync_msg,
             Protocol.SYNC_END:        self._on_sync_end,
-            Protocol.RES_CREATE_ROOM: self._on_create_room,
-            Protocol.RES_SEND_MSG:    self._on_new_message,
-            Protocol.RES_LEAVE_ROOM:  self._on_leave_room,
-            Protocol.RES_ADD_USER:         self._on_add_user,
-            "ADD_USER_NOTIFICATION":       self._on_add_user,
-            Protocol.RES_DELETE_ROOM:      self._on_delete_room,
-            Protocol.RES_JOIN_ROOM:        self._on_join_request_response,
-            "JOIN_REQUEST_RESPONSE":       self._on_join_request_response,
-            "REQUEST_NOTIFICATION":        self._on_request_notification,
-            "DELETE_REQUEST_RESPONSE":     self._on_delete_request_response,
-            "DELETE_REQUEST_NOTIFICATION": self._on_delete_request_response,
+            Protocol.RES_CREATE_ROOM:        self._on_create_room,
+            "NEW_CHATROOM_NOTIFICATION":     self._on_create_room,
+            Protocol.RES_SEND_MSG:           self._on_new_message,
+            "NEW_MESSAGE_NOTIFICATION":      self._on_new_message,
+            Protocol.RES_LEAVE_ROOM:         self._on_leave_room,
+            "REMOVE_USER_NOTIFICATION":      self._on_leave_room,
+            Protocol.RES_ADD_USER:           self._on_add_user,
+            "ADD_USER_NOTIFICATION":         self._on_add_user,
+            Protocol.RES_DELETE_ROOM:        self._on_delete_room,
+            "DELETE_MESSAGE_RESPONSE":       self._on_delete_message,
+            Protocol.RES_JOIN_ROOM:          self._on_join_request_response,
+            "JOIN_REQUEST_RESPONSE":         self._on_join_request_response,
+            "REQUEST_NOTIFICATION":          self._on_request_notification,
+            "DELETE_REQUEST_RESPONSE":       self._on_delete_request_response,
+            "DELETE_REQUEST_NOTIFICATION":   self._on_delete_request_response,
             Protocol.EVT_USER_ONLINE:  self._on_user_online,
             Protocol.EVT_USER_OFFLINE: self._on_user_offline,
         }
@@ -379,8 +387,9 @@ class ProtocolDispatcher:
         uid      = p.get("id")
         username = descifrar_texto(p.get("username") or p.get("name", ""))
         nickname = descifrar_texto(p.get("nickname") or p.get("name") or p.get("username", ""))
-        buf["users"][uid] = {"username": username, "nickname": nickname}
-        print(f"[dispatcher]   SYNC usuario #{uid}: {nickname}")
+        online   = bool(p.get("online", False))
+        buf["users"][uid] = {"username": username, "nickname": nickname, "online": online}
+        print(f"[dispatcher]   SYNC usuario #{uid}: {nickname} online={online}")
 
     def _on_sync_msg(self, sid, status, p):
         buf = self._sync.get(sid)
@@ -425,12 +434,14 @@ class ProtocolDispatcher:
             if uid == my_id:
                 continue
             if isinstance(entry, dict):
-                nick = entry.get("nickname") or entry.get("username") or str(uid)
-                uname = entry.get("username") or str(uid)
+                nick   = entry.get("nickname") or entry.get("username") or str(uid)
+                uname  = entry.get("username") or str(uid)
+                online = entry.get("online", False)
             else:
-                nick = entry or str(uid)
-                uname = entry or str(uid)
-            all_users.append({"username": uname, "nickname": nick, "online": True})
+                nick   = entry or str(uid)
+                uname  = entry or str(uid)
+                online = False
+            all_users.append({"username": uname, "nickname": nick, "online": online})
 
         print(f"[dispatcher] SYNC_END → {len(rooms_list)} salas, {len(users)} usuarios")
         self.sio.emit("lobby_update", {
@@ -543,22 +554,22 @@ class ProtocolDispatcher:
 
     def _on_create_room(self, sid, status, p):
         if p.get("success") == 1:
-            cr      = p.get("chatRoom", p)
-            room_id = cr.get("id")
-            my_id   = self._user_ids.get(sid)
+            cr        = p.get("chatRoom", p)
+            room_id   = cr.get("id")
+            my_id     = self._user_ids.get(sid)
+            room_name = descifrar_texto(cr.get("name", ""))
 
             already_known = room_id in self._rooms.get(sid, {})
 
             if room_id is not None:
                 self._rooms.setdefault(sid, {})[room_id] = {
                     "id":            room_id,
-                    "name":          room_name,   # ya descifrado
+                    "name":          room_name,
                     "coordinatorId": cr.get("coordinatorId", my_id),
                     "userIds":       list(cr.get("userIds", [my_id])),
                 }
                 self._messages.setdefault(sid, {})[room_id] = []
 
-            room_name = descifrar_texto(cr.get("name", ""))
             print(f"[dispatcher] room_created #{room_id}: {room_name}")
             if not already_known:
                 self.sio.emit("room_created", {
@@ -741,6 +752,22 @@ class ProtocolDispatcher:
             self.sio.emit("room_error",
                           {"message": "Solo puedes eliminar si eres el único miembro"}, to=sid)
 
+    def _on_delete_message(self, sid, status, p):
+        if p.get("success") != 1:
+            return
+        message_id = p.get("messageId")
+        room_id = None
+        for rid, msgs in self._messages.get(sid, {}).items():
+            for i, m in enumerate(msgs):
+                if m.get("ts") == message_id:
+                    msgs.pop(i)
+                    room_id = rid
+                    break
+            if room_id is not None:
+                break
+        print(f"[dispatcher] delete_message #{message_id} en sala #{room_id}")
+        self.sio.emit("message_deleted", {"message_id": message_id, "room_id": room_id}, to=sid)
+
     # ── Eventos push ─────────────────────────────────────────────────
 
     def _on_user_online(self, sid, status, p):
@@ -757,13 +784,18 @@ class ProtocolDispatcher:
                        "userId": user_id}, to=sid)
 
     def _on_user_offline(self, sid, status, p):
-        username = descifrar_texto(p.get("username") or p.get("name", ""))
-        user_id  = p.get("userId") or p.get("id")
+        username     = descifrar_texto(p.get("username") or p.get("name", ""))
+        user_id      = p.get("userId") or p.get("id")
+        nickname_raw = descifrar_texto(p.get("nickname") or p.get("username") or p.get("name", ""))
 
         if user_id and sid in self._users:
-            self._users[sid].pop(user_id, None)
+            entry = self._users[sid].get(user_id)
+            if isinstance(entry, dict):
+                entry["online"] = False
+            else:
+                self._users[sid][user_id] = {"username": username, "nickname": nickname_raw, "online": False}
 
-        print(f"[dispatcher] USER_OFFLINE: {username} (#{user_id})")
+        print(f"[dispatcher] USER_OFFLINE: {nickname_raw} (#{user_id})")
         self.sio.emit("user_offline",
-                      {"username": username, "nickname": username,
+                      {"username": username, "nickname": nickname_raw,
                        "userId": user_id}, to=sid)

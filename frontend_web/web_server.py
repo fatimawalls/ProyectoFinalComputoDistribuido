@@ -164,7 +164,17 @@ def listen_to_c_server(sid: str, sock: socket.socket):
 # LISTENER UDP
 # ════════════════════════════════════════════════════════════════════════
 
-UDP_LISTEN_PORT = 5001
+# ── Puerto UDP dinámico: el OS asigna un puerto libre igual que el desktop ──
+_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+_udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    _udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+except AttributeError:
+    pass
+_udp_sock.bind(("", 0))          # puerto 0 → OS elige uno libre
+UDP_LISTEN_PORT = _udp_sock.getsockname()[1]
+print(f"[udp] Puerto UDP dinámico asignado: {UDP_LISTEN_PORT}")
+
 _udp_seen: dict[str, float] = {}
 
 
@@ -181,14 +191,9 @@ def _is_duplicate_udp(raw: str) -> bool:
 
 
 def udp_listener():
-    try:
-        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        udp_sock.bind(("", UDP_LISTEN_PORT))
-        print(f"[udp] Escuchando notificaciones UDP en puerto {UDP_LISTEN_PORT}")
-    except Exception as e:
-        print(f"[udp] ERROR: no se pudo abrir UDP {UDP_LISTEN_PORT}: {e}")
-        return
+    # Reutiliza el socket ya creado con puerto dinámico
+    udp_sock = _udp_sock
+    print(f"[udp] Escuchando notificaciones UDP en puerto {UDP_LISTEN_PORT}")
 
     while True:
         try:

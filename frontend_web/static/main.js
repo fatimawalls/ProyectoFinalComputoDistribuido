@@ -189,6 +189,13 @@ function makeRoomItem(r) {
         li.appendChild(badge);
     }
 
+    if (r.pendingRequests > 0) {
+        const reqBadge = document.createElement('span');
+        reqBadge.className = 'notif-badge req-badge';
+        reqBadge.innerText = `+${r.pendingRequests}`;
+        li.appendChild(reqBadge);
+    }
+
     li.onclick = () => selectRoom(r);
     return li;
 }
@@ -397,7 +404,16 @@ socket.on('join_request_response', data => {
 });
 
 socket.on('new_join_request', data => {
-    // Actualizar badge del botón Manage Room
+    // Siempre actualizar el badge del sidebar para esa sala
+    const room = lobbyData.rooms.find(r => r.id === data.room_id);
+    if (room) {
+        room.pendingRequests = data.count;
+        updateChannelList();
+        // Toast de notificación visible desde cualquier pantalla
+        showToast(data.room_id, room.name, data.nickname || data.username, 'wants to join this room');
+    }
+
+    // Si el coordinador está en esa sala, actualizar el botón Manage Room
     const btn = document.getElementById('btn-manage');
     if (btn && data.room_id === activeRoom && isCoordinator) {
         btn.innerText = `⚙ Manage Room  [${data.count}]`;
@@ -472,6 +488,8 @@ function openCoordPanel() {
 
 socket.on('coord_data', data => {
     const room = lobbyData.rooms.find(r => r.id === data.room_id);
+    // Limpiar badge de requests al abrir el panel
+    if (room && room.pendingRequests) { room.pendingRequests = 0; updateChannelList(); }
     document.getElementById('coord-title').innerText = `# ${room ? room.name : data.room_id}`;
 
     const reqDiv = document.getElementById('coord-requests');

@@ -307,6 +307,11 @@ body {
     flex-shrink: 0;
 }
 
+/* Badge de solicitudes pendientes — color acento (diferente a mensajes) */
+.req-badge {
+    background-color: var(--accent);
+}
+
 /* Online list */
 #users-list li {
     display: flex;

@@ -120,6 +120,46 @@ static void report_load_balancer(const char* event)
     close(fd);
 }
 
+static void* heartbeat_thread(void* arg)
+{
+    (void)arg;
+    while (1) {
+        sleep(5);
+        if (g_lb_host[0] == '\0') continue;
+
+        pthread_mutex_lock(&g_state->lock);
+        int count = 0;
+        for (int i = 0; i < MAX_USERS; i++)
+            if (g_state->users[i].active) count++;
+        pthread_mutex_unlock(&g_state->lock);
+
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) continue;
+        int reuse = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        struct sockaddr_in local;
+        memset(&local, 0, sizeof(local));
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = INADDR_ANY;
+        local.sin_port = htons(UDP_PORT);
+        bind(fd, (struct sockaddr*)&local, sizeof(local));
+
+        struct sockaddr_in lb;
+        memset(&lb, 0, sizeof(lb));
+        lb.sin_family = AF_INET;
+        lb.sin_port = htons(g_lb_udp_port);
+        inet_aton(g_lb_host, &lb.sin_addr);
+
+        char payload[128];
+        snprintf(payload, sizeof(payload),
+            "{\"event\":\"heartbeat\",\"port\":%d,\"connections\":%d}", UDP_PORT, count);
+        sendto(fd, payload, strlen(payload), 0, (struct sockaddr*)&lb, sizeof(lb));
+        close(fd);
+        LOG("[HEARTBEAT] connections=%d -> %s:%d", count, g_lb_host, g_lb_udp_port);
+    }
+    return NULL;
+}
+
 /* ============================================================
    SHARED MEMORY — usuarios conectados
    ============================================================ */
@@ -972,6 +1012,10 @@ int main(int argc, char* argv[])
     pthread_t t_redis;
     pthread_create(&t_redis, NULL, redis_subscriber_thread, NULL);
     pthread_detach(t_redis);
+
+    pthread_t t_heartbeat;
+    pthread_create(&t_heartbeat, NULL, heartbeat_thread, NULL);
+    pthread_detach(t_heartbeat);
 
     while (1) {
         struct sockaddr_in ca;

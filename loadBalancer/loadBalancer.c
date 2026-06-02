@@ -162,6 +162,10 @@ static int is_reachable(const char* ip, int port)
         // select devolvió 0 (timeout) o -1 (error) → ok queda 0
     }
 
+    if (ok) {
+        send(fd, "HEALTH_CHECK\n", 13, 0);
+    }
+
     close(fd);
     return ok;
 }
@@ -203,6 +207,7 @@ static void* health_thread(void* arg)
                 LOG("[HEALTH] %s:%d -> %s", s->int_ip, s->int_port, s->alive ? "UP" : "DOWN");
                 if (!s->alive) s->connections = 0;
             }
+            
             LOG("[HEALTH]   [%d] %s:%d alive=%d connections=%d",
                 i, s->int_ip, s->int_port, s->alive, s->connections);
         }
@@ -294,6 +299,13 @@ static void* udp_thread(void* arg)
                 if (s->connections > 0) s->connections--;
                 LOG("[UDP] disconnect %s:%d → server[%d] conexiones=%d",
                     src_ip, int_port, i, s->connections);
+            }
+            else if (strcmp(event, "heartbeat") == 0) {
+                cJSON* jconn = cJSON_GetObjectItem(obj, "connections");
+                if (cJSON_IsNumber(jconn)) {
+                    s->connections = jconn->valueint;  // reemplaza, no suma
+                    LOG("[UDP] heartbeat %s:%d → conexiones=%d", src_ip, int_port, s->connections);
+                }
             }
             break;
         }

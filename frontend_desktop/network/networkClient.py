@@ -60,11 +60,44 @@ on_user_online(user_id, username)        * usuario nuevo conectado/registrado
 on_server_disconnected()
 """
 
+import base64
+import hashlib
 import json
 import socket
 import threading
 
 ENCODING = "utf-8"
+
+# ── Cifrado XOR con keystream SHA-256 ───────────────────────────────────────
+_CIPHER_KEY = b"PimentelCo_DistSys_2024"
+
+def _keystream(length: int) -> bytes:
+    """Keystream determinista derivado de _CIPHER_KEY usando SHA-256."""
+    stream, counter = b"", 0
+    while len(stream) < length:
+        stream += hashlib.sha256(_CIPHER_KEY + counter.to_bytes(4, "big")).digest()
+        counter += 1
+    return stream[:length]
+
+def cifrar(texto: str) -> str:
+    """Cifra texto plano → base64 usando XOR con keystream SHA-256."""
+    if not texto:
+        return texto
+    data = texto.encode("utf-8")
+    enc  = bytes(a ^ b for a, b in zip(data, _keystream(len(data))))
+    return base64.b64encode(enc).decode("ascii")
+
+def descifrar(texto: str) -> str:
+    """Descifra base64 → texto plano (inverso de cifrar)."""
+    if not texto:
+        return texto
+    try:
+        data = base64.b64decode(texto.encode("ascii"))
+        dec  = bytes(a ^ b for a, b in zip(data, _keystream(len(data))))
+        return dec.decode("utf-8")
+    except Exception:
+        return texto  # fallback: devolver tal cual si no es texto cifrado
+# ────────────────────────────────────────────────────────────────────────────
 
 
 class NetworkClient:
@@ -259,41 +292,41 @@ class NetworkClient:
         return udp_ip, udp_port
 
     def login(self, username: str, password: str):
-        """Envía AUTH al servidor."""
+        """Envía AUTH al servidor con username y password cifrados."""
         udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
             "type":     "AUTH",
-            "username": username,
-            "password": password,
+            "username": cifrar(username),
+            "password": cifrar(password),
             "udpIp":    udp_ip,
             "udpPort":  udp_port,
         })
 
     def register(self, username: str, password: str):
-        """Envía CREATE_ACCOUNT al servidor."""
+        """Envía CREATE_ACCOUNT al servidor con campos cifrados."""
         udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
             "type":     "CREATE_ACCOUNT",
-            "username": username,
-            "password": password,
+            "username": cifrar(username),
+            "password": cifrar(password),
             "udpIp":    udp_ip,
             "udpPort":  udp_port,
         })
 
     def send_message(self, room_id: int, text: str):
-        """Envía NEW_MESSAGE. El servidor actualiza la DB y hace broadcast."""
+        """Envía NEW_MESSAGE con texto cifrado."""
         self._send({
             "type":       "NEW_MESSAGE",
-            "text":       text,
+            "text":       cifrar(text),
             "userId":     self.me.get("id"),
             "chatRoomId": room_id,
         })
 
     def create_room(self, name: str):
-        """Crea una sala nueva. El coordinador es el usuario actual."""
+        """Crea una sala nueva con nombre cifrado."""
         self._send({
             "type":          "NEW_CHATROOM",
-            "name":          name,
+            "name":          cifrar(name),
             "coordinatorId": self.me.get("id"),
         })
 
@@ -344,10 +377,10 @@ class NetworkClient:
         })
 
     def send_system_message(self, room_id: int, text: str):
-        """Envía mensaje persistente de sistema usando userId=0."""
+        """Envía mensaje persistente de sistema usando userId=0, con texto cifrado."""
         self._send({
             "type":       "NEW_MESSAGE",
-            "text":       text,
+            "text":       cifrar(text),
             "userId":     0,
             "chatRoomId": room_id,
         })
@@ -615,15 +648,17 @@ class NetworkClient:
     def _on_auth_response(self, obj: dict):
         success = bool(obj.get("success"))
         if success:
+            raw_user = descifrar(obj.get("username", ""))
+            raw_nick = descifrar(obj.get("nickname") or obj.get("username", ""))
             self.me = {
                 "id":       obj.get("userId"),
-                "username": obj.get("username", ""),
-                "nickname": obj.get("nickname") or obj.get("username", ""),
+                "username": raw_user,
+                "nickname": raw_nick,
             }
 
             self._upsert_user(
                 {
-                    "id": self.me["id"],
+                    "id":       self.me["id"],
                     "username": self.me["username"],
                     "nickname": self.me["nickname"],
                 },
@@ -639,9 +674,9 @@ class NetworkClient:
                 self.on_login_response(False, "Credenciales incorrectas")
 
     def _on_register_response(self, obj: dict):
-        success = bool(obj.get("success"))
+        success  = bool(obj.get("success"))
         user_id  = obj.get("userId", -1)
-        username = obj.get("username", "")
+        username = descifrar(obj.get("username", ""))
         print(f"[RED] Register {'OK' if success else 'FAIL'}")
         if self.on_register_response:
             self.on_register_response(success, user_id, username)
@@ -662,6 +697,10 @@ class NetworkClient:
         if not self._syncing:
             return
 
+        obj = dict(obj)
+        if obj.get("name"):
+            obj["name"] = descifrar(obj["name"])
+
         room = self._upsert_room(obj)
 
         if not room:
@@ -673,6 +712,11 @@ class NetworkClient:
     def _on_sync_chat_user(self, obj: dict):
         if not self._syncing:
             return
+
+        obj = dict(obj)
+        for field in ("username", "name", "nickname"):
+            if obj.get(field):
+                obj[field] = descifrar(obj[field])
 
         user = self._upsert_user(obj, online=obj.get("online", False))
 
@@ -689,7 +733,7 @@ class NetworkClient:
             "id":         obj.get("id"),
             "userId":     obj.get("userId"),
             "chatRoomId": room_id,
-            "text":       obj.get("text", ""),
+            "text":       descifrar(obj.get("text", "")),
         }
 
         if self._append_message_once(msg):
@@ -714,9 +758,9 @@ class NetworkClient:
         """
         Evento push cuando un usuario se conecta o se registra.
         """
-        user_id = obj.get("userId") or obj.get("id")
-        username = obj.get("username") or obj.get("name", "")
-        nickname = obj.get("nickname") or username
+        user_id  = obj.get("userId") or obj.get("id")
+        username = descifrar(obj.get("username") or obj.get("name", ""))
+        nickname = descifrar(obj.get("nickname")) if obj.get("nickname") else username
 
         if user_id:
             user = self._upsert_user(
@@ -737,9 +781,9 @@ class NetworkClient:
         """
         Evento push cuando un usuario se desconecta.
         """
-        user_id = obj.get("userId") or obj.get("id")
-        username = obj.get("username") or obj.get("name", "")
-        nickname = obj.get("nickname") or username
+        user_id  = obj.get("userId") or obj.get("id")
+        username = descifrar(obj.get("username") or obj.get("name", ""))
+        nickname = descifrar(obj.get("nickname")) if obj.get("nickname") else username
 
         if user_id:
             user = self._upsert_user(
@@ -761,13 +805,13 @@ class NetworkClient:
             return
 
         msg_data = obj.get("message", {})
-        room_id = msg_data.get("chatRoomId")
+        room_id  = msg_data.get("chatRoomId")
 
         msg = {
             "id":         msg_data.get("id"),
             "userId":     msg_data.get("userId"),
             "chatRoomId": room_id,
-            "text":       msg_data.get("text", ""),
+            "text":       descifrar(msg_data.get("text", "")),
         }
 
         was_new = self._append_message_once(msg)
@@ -785,7 +829,10 @@ class NetworkClient:
         if not obj.get("success"):
             return
 
-        room = self._upsert_room(obj.get("chatRoom", {}))
+        chat_room_data = dict(obj.get("chatRoom", {}))
+        if chat_room_data.get("name"):
+            chat_room_data["name"] = descifrar(chat_room_data["name"])
+        room = self._upsert_room(chat_room_data)
 
         if not room:
             return
@@ -806,6 +853,9 @@ class NetworkClient:
         if chat_user:
             chat_user = dict(chat_user)
             chat_user.setdefault("id", user_id)
+            for field in ("username", "name", "nickname"):
+                if chat_user.get(field):
+                    chat_user[field] = descifrar(chat_user[field])
             self._upsert_user(chat_user)
 
         if obj.get("chatRoom"):
@@ -930,10 +980,10 @@ class NetworkClient:
     def create_account(self, username, password):
         udp_ip, udp_port = self._get_udp_endpoint()
         payload = {
-            "type":    "CREATE_ACCOUNT",
-            "username": username,
-            "password": password,
-            "udpIp":   udp_ip,
-            "udpPort": udp_port,
+            "type":     "CREATE_ACCOUNT",
+            "username": cifrar(username),
+            "password": cifrar(password),
+            "udpIp":    udp_ip,
+            "udpPort":  udp_port,
         }
         self._send(payload)

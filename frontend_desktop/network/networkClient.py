@@ -97,6 +97,8 @@ class NetworkClient:
         self.on_user_online       = None  # (user_id, username)
         self.on_user_offline      = None  # (user_id, username)
         self.on_server_disconnected = None  # ()
+        self.on_all_users_loaded  = None  # ()
+        self.on_all_rooms_loaded  = None  # ()
         
 
     # ═══════════════════════════════════════════════════════════════
@@ -245,20 +247,37 @@ class NetworkClient:
         except Exception as e:
             print(f"[RED] Error al enviar: {e}")
 
+    def _get_udp_endpoint(self):
+        """Devuelve (ip, port) del socket UDP local, para enviarlo al servidor en AUTH."""
+        udp_ip = self._guess_udp_ip("")
+        udp_port = 5001
+        try:
+            if hasattr(self, 'udp_socket') and self.udp_socket:
+                udp_port = self.udp_socket.getsockname()[1]
+        except Exception:
+            pass
+        return udp_ip, udp_port
+
     def login(self, username: str, password: str):
         """Envía AUTH al servidor."""
+        udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
             "type":     "AUTH",
             "username": username,
             "password": password,
+            "udpIp":    udp_ip,
+            "udpPort":  udp_port,
         })
 
     def register(self, username: str, password: str):
         """Envía CREATE_ACCOUNT al servidor."""
+        udp_ip, udp_port = self._get_udp_endpoint()
         self._send({
             "type":     "CREATE_ACCOUNT",
             "username": username,
             "password": password,
+            "udpIp":    udp_ip,
+            "udpPort":  udp_port,
         })
 
     def send_message(self, room_id: int, text: str):
@@ -908,17 +927,13 @@ class NetworkClient:
         }
         self._send(payload)
 
-    def delete_message(self, message_id: int):
-        payload = {
-            "type": "DELETE_MESSAGE",
-            "messageId": message_id
-        }
-        self._send(payload)
-
     def create_account(self, username, password):
+        udp_ip, udp_port = self._get_udp_endpoint()
         payload = {
-            "type": "CREATE_ACCOUNT",
+            "type":    "CREATE_ACCOUNT",
             "username": username,
-            "password": password
+            "password": password,
+            "udpIp":   udp_ip,
+            "udpPort": udp_port,
         }
         self._send(payload)

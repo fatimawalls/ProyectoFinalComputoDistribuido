@@ -71,6 +71,7 @@ class ChatClientGUI:
         dialog.resizable(False, False)
         dialog.configure(bg=self.BG_MAIN)
         dialog.transient(win)
+        dialog.wait_visibility()
         dialog.grab_set()
         dialog.focus_force()
 
@@ -130,6 +131,7 @@ class ChatClientGUI:
         dialog.resizable(False, False)
         dialog.configure(bg=self.BG_MAIN)
         dialog.transient(win)
+        dialog.wait_visibility()
         dialog.grab_set()
         dialog.focus_force()
 
@@ -803,6 +805,7 @@ class ChatClientGUI:
         panel.geometry("400x500")
         panel.configure(bg=self.BG_DARK)
         panel.transient(self.root)
+        panel.wait_visibility()
         panel.grab_set()
 
         tk.Label(panel, text=f"MIEMBROS DE #{room['name']}", font=self.FONT_TITLE,
@@ -927,6 +930,7 @@ class ChatClientGUI:
         panel.resizable(False, True)
         panel.configure(bg=self.BG_DARK)
         panel.transient(self.root)
+        panel.wait_visibility()
         panel.grab_set()
 
         # ── Título ────────────────────────────────────────────────
@@ -1121,6 +1125,7 @@ class ChatClientGUI:
                         panel.destroy()
                         self.refresh_sidebar()
                     else:
+                        panel.wait_visibility()
                         panel.grab_set()
 
                 btn_kick = tk.Button(m_item, text="KICK", font=self.FONT_SMALL,
@@ -1148,6 +1153,7 @@ class ChatClientGUI:
                         self.info_dialog("ADVERTENCIA",
                                          "Solo puedes eliminar la sala si eres el último miembro.",
                                          parent=panel, color=self.WARNING_COLOR)
+                        panel.wait_visibility()
                         panel.grab_set()
                         return
                 panel.destroy()
@@ -1155,6 +1161,7 @@ class ChatClientGUI:
                 self.refresh_sidebar()
                 self.show_welcome_view()
             else:
+                panel.wait_visibility()
                 panel.grab_set()
 
         tk.Button(footer_frame, text="DELETE ROOM", font=self.FONT_LABEL,
@@ -1192,6 +1199,7 @@ class ChatClientGUI:
             self.insert_system_message(f"{username} was removed from the room.")
             self.open_coordinator_panel(room_id)
         else:
+            panel.wait_visibility()
             panel.grab_set()
 
     def coord_add(self, room_id, username, nickname, panel):
@@ -1217,8 +1225,10 @@ class ChatClientGUI:
                 self.info_dialog("WARNING",
                                  "You can only delete a room when you are the last member.",
                                  parent=panel, color=self.WARNING_COLOR)
+                panel.wait_visibility()
                 panel.grab_set()
         else:
+            panel.wait_visibility()
             panel.grab_set()
 
     # ─────────────────────────────────────────────
@@ -1321,6 +1331,7 @@ class ChatClientGUI:
         dialog.resizable(False, False)
         dialog.configure(bg=self.BG_MAIN)
         dialog.transient(self.root)
+        dialog.wait_visibility()
         dialog.grab_set()
 
         dialog.update_idletasks()

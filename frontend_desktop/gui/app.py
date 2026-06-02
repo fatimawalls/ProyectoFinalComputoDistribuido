@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 import random
 from tkinter import scrolledtext
@@ -202,17 +203,26 @@ class ChatClientGUI:
                                                    anchor="nw")
 
         def _on_frame_configure(e):
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.configure(scrollregion=bbox)
         def _on_canvas_configure(e):
             canvas.itemconfig(self._scroll_win, width=e.width)
 
         self._scroll_inner.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Mouse wheel
+        # Mouse wheel — Windows/macOS usan <MouseWheel>, Linux usa Button-4/5
         def _on_mousewheel(e):
             canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _on_mousewheel_linux(e):
+            canvas.yview_scroll(-1 if e.num == 4 else 1, "units")
+
+        if sys.platform in ("win32", "darwin"):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        else:
+            canvas.bind_all("<Button-4>", _on_mousewheel_linux)
+            canvas.bind_all("<Button-5>", _on_mousewheel_linux)
 
         # ── MY CHANNELS ──────────────────────────────────────────
         my_hdr = tk.Frame(self._scroll_inner, bg=self.BG_DARK)
@@ -750,7 +760,10 @@ class ChatClientGUI:
             bd=0, font=self.FONT_CODE, wrap="word",
             highlightthickness=0, spacing1=5, spacing3=5)
         self.chat_history.pack(fill="both", expand=True)
-        self.chat_history.vbar.configure(width=10)
+        try:
+            self.chat_history.vbar.configure(width=10)
+        except Exception:
+            pass
 
         self.chat_history.tag_config("system", foreground=self.ACCENT, font=("Consolas", 10, "italic"))
         self.chat_history.tag_config("user",   foreground=self.TEXT_MUTED, font=("Consolas", 11, "bold"))

@@ -54,6 +54,18 @@ def make_btn(parent, text, command, primary=True):
 # LoginView  —  ahora es un Toplevel, no un Tk con mainloop propio
 # ─────────────────────────────────────────────────────────────────
 
+def _center_window(win, w, h):
+    """Centra `win` en la pantalla tras que el WM aplique decoraciones."""
+    def _do():
+        win.update_idletasks()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 2)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+    win.after(0, _do)
+
+
 class LoginView(tk.Toplevel):
     """
     Ventana de login que vive como Toplevel hijo del root del AppController.
@@ -66,19 +78,13 @@ class LoginView(tk.Toplevel):
         self.on_go_register   = on_go_register
 
         self.title("PIMENTEL CO. // ACCESS")
-        self.geometry("460x560")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(360, 480)
         self.configure(bg=BG_MAIN)
 
-        # Centrar
-        self.update_idletasks()
-        x = (self.winfo_screenwidth()  - 460) // 2
-        y = (self.winfo_screenheight() - 560) // 2
-        self.geometry(f"460x560+{x}+{y}")
+        _center_window(self, 460, 560)
 
-        # Impedir que cerrar la ventana mate todo el proceso
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
         self._build_ui()
 
     def _on_close(self):
@@ -86,6 +92,9 @@ class LoginView(tk.Toplevel):
         self.master.destroy()
 
     def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+
         header = tk.Frame(self, bg=BG_MAIN)
         header.pack(fill="x", padx=50, pady=(50, 0))
 
@@ -98,6 +107,7 @@ class LoginView(tk.Toplevel):
 
         form = tk.Frame(self, bg=BG_MAIN, padx=50)
         form.pack(fill="both", expand=True, pady=10)
+        form.columnconfigure(0, weight=1)
 
         self.entry_user = make_input_field(form, "USERNAME")
         self.entry_pass = make_input_field(form, "PASSWORD", show="●")
@@ -167,14 +177,11 @@ class RegisterView(tk.Toplevel):
         self.on_go_login         = on_go_login
 
         self.title("PIMENTEL CO. // NEW USER REGISTRATION")
-        self.geometry("460x720")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(360, 580)
         self.configure(bg=BG_MAIN)
 
-        self.update_idletasks()
-        x = (self.winfo_screenwidth()  - 460) // 2
-        y = (self.winfo_screenheight() - 720) // 2
-        self.geometry(f"460x720+{x}+{y}")
+        _center_window(self, 460, 720)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -183,6 +190,9 @@ class RegisterView(tk.Toplevel):
         self.master.destroy()
 
     def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+
         header = tk.Frame(self, bg=BG_MAIN)
         header.pack(fill="x", padx=50, pady=(45, 0))
 
@@ -196,6 +206,7 @@ class RegisterView(tk.Toplevel):
 
         form = tk.Frame(self, bg=BG_MAIN, padx=50)
         form.pack(fill="both", expand=True, pady=10)
+        form.columnconfigure(0, weight=1)
 
         self.entry_user    = make_input_field(form, "USERNAME")
         self.entry_nick    = make_input_field(form, "DISPLAY NAME")

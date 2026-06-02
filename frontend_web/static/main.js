@@ -301,6 +301,16 @@ socket.on('user_joined', data => {
         room.members.push(data.plain_username);
         updateChannelList();
     }
+
+    // Si el usuario aceptado soy yo, navegar automáticamente al chat
+    if (data.plain_username === currentUser) {
+        pendingRooms.delete(data.room_id);
+        activeRoom = data.room_id;
+        updateChannelList();
+        socket.emit('join_chat_view', { room_id: data.room_id });
+        return;
+    }
+
     if (data.room_id === activeRoom) {
         appendMsg('__SYSTEM__', `${data.username} has joined the room.`);
     }

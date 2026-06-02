@@ -1341,6 +1341,8 @@ class ChatClientGUI:
             added_id = user_dict.get("id") if isinstance(user_dict, dict) else None
             if added_id == my_id:
                 self.pending_rooms.discard(room_id)
+                self.current_room = room_id
+                self.show_chat_view(room_id)
         self.refresh_sidebar()
 
     def on_user_removed(self, room_id, user_id):

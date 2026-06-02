@@ -212,8 +212,9 @@ class ProtocolDispatcher:
             Protocol.RES_CREATE_ROOM: self._on_create_room,
             Protocol.RES_SEND_MSG:    self._on_new_message,
             Protocol.RES_LEAVE_ROOM:  self._on_leave_room,
-            Protocol.RES_ADD_USER:    self._on_add_user,
-            Protocol.RES_DELETE_ROOM: self._on_delete_room,
+            Protocol.RES_ADD_USER:         self._on_add_user,
+            "ADD_USER_NOTIFICATION":       self._on_add_user,
+            Protocol.RES_DELETE_ROOM:      self._on_delete_room,
             Protocol.RES_JOIN_ROOM:        self._on_join_request_response,
             "JOIN_REQUEST_RESPONSE":       self._on_join_request_response,
             "REQUEST_NOTIFICATION":        self._on_request_notification,
@@ -669,14 +670,17 @@ class ProtocolDispatcher:
 
     def _on_request_notification(self, sid, status, p):
         """Llega al coordinador cuando alguien solicita unirse a su sala."""
-        if p.get("success") != 1:
+        if not p.get("success"):
             return
 
-        room_id = p.get("chatRoomId")
+        chat_room_data = p.get("chatRoom")
+        room_id = p.get("chatRoomId") or (chat_room_data.get("id") if chat_room_data else None)
         user_id = p.get("userId")
 
-        # Sincronizar estado completo si el servidor manda el chatRoom actualizado
-        chat_room_data = p.get("chatRoom")
+        if room_id is None:
+            print(f"[dispatcher] REQUEST_NOTIFICATION sin room_id — ignorado")
+            return
+
         room = self._rooms.get(sid, {}).get(room_id)
         if chat_room_data and room:
             room["requestIds"] = list(chat_room_data.get("requestIds", room.get("requestIds", [])))

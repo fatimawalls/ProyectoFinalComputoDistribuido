@@ -1,176 +1,106 @@
 [{
-		"id":	1,
-		"name":	"general",
-		"coordinatorId":	1,
-		"userIds":	[1],
-		"messageIds":	[1, 16, 18, 25]
+		"id":	2,
+		"name":	"qrypnu",
+		"coordinatorId":	4,
+		"userIds":	[4, 7, 8],
+		"messageIds":	[3, 4, 5, 13],
+		"requestIds":	[]
 	}, {
 		"id":	3,
-		"name":	"prueba2",
-		"coordinatorId":	2,
-		"userIds":	[2, 14],
-		"messageIds":	[2, 13]
+		"name":	"u|yn",
+		"coordinatorId":	6,
+		"userIds":	[6],
+		"messageIds":	[2, 10],
+		"requestIds":	[8]
 	}, {
 		"id":	4,
-		"name":	"prueba4",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[]
+		"name":	"WnvzrPun",
+		"coordinatorId":	5,
+		"userIds":	[5],
+		"messageIds":	[1],
+		"requestIds":	[8]
 	}, {
 		"id":	5,
-		"name":	"prueba5",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[]
+		"name":	"zn-pun",
+		"coordinatorId":	4,
+		"userIds":	[4],
+		"messageIds":	[],
+		"requestIds":	[]
 	}, {
 		"id":	6,
-		"name":	"prueban+1",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[3, 44, 45, 46, 47],
+		"name":	"U|yn?",
+		"coordinatorId":	8,
+		"userIds":	[8, 4],
+		"messageIds":	[6, 7, 8, 11, 12, 43],
 		"requestIds":	[]
 	}, {
 		"id":	7,
-		"name":	"general",
-		"coordinatorId":	3,
-		"userIds":	[3],
-		"messageIds":	[4]
-	}, {
-		"id":	8,
-		"name":	"general",
-		"coordinatorId":	4,
-		"userIds":	[4],
-		"messageIds":	[5]
-	}, {
-		"id":	9,
-		"name":	"general",
-		"coordinatorId":	5,
-		"userIds":	[5],
-		"messageIds":	[6]
-	}, {
-		"id":	10,
-		"name":	"general",
+		"name":	"zvlrr",
 		"coordinatorId":	6,
 		"userIds":	[6],
-		"messageIds":	[7]
+		"messageIds":	[14, 15, 16],
+		"requestIds":	[]
 	}, {
-		"id":	11,
-		"name":	"general",
+		"id":	8,
+		"name":	"}ry|{rlnrzoyr",
 		"coordinatorId":	7,
 		"userIds":	[7],
-		"messageIds":	[8]
+		"messageIds":	[],
+		"requestIds":	[]
+	}, {
+		"id":	9,
+		"name":	"U|yn@",
+		"coordinatorId":	8,
+		"userIds":	[8, 4],
+		"messageIds":	[9, 41],
+		"requestIds":	[]
+	}, {
+		"id":	10,
+		"name":	"U|ynA",
+		"coordinatorId":	8,
+		"userIds":	[8, 9],
+		"messageIds":	[19, 20, 42],
+		"requestIds":	[]
+	}, {
+		"id":	11,
+		"name":	"]ron`nzry",
+		"coordinatorId":	5,
+		"userIds":	[5, 6],
+		"messageIds":	[],
+		"requestIds":	[]
 	}, {
 		"id":	12,
-		"name":	"general",
-		"coordinatorId":	8,
-		"userIds":	[8],
-		"messageIds":	[9]
+		"name":	"U|yn-pnpx",
+		"coordinatorId":	5,
+		"userIds":	[5, 6],
+		"messageIds":	[17, 18],
+		"requestIds":	[]
 	}, {
 		"id":	13,
-		"name":	"general",
+		"name":	"}rr{npv|{",
 		"coordinatorId":	9,
 		"userIds":	[9],
-		"messageIds":	[10]
+		"messageIds":	[21, 22, 23, 24, 25, 26],
+		"requestIds":	[6]
 	}, {
 		"id":	14,
-		"name":	"general",
-		"coordinatorId":	10,
-		"userIds":	[10],
-		"messageIds":	[11],
-		"requestIds":	[2]
+		"name":	"]ron\\zn",
+		"coordinatorId":	7,
+		"userIds":	[7, 6, 9],
+		"messageIds":	[27, 28, 29, 30, 31, 32, 33],
+		"requestIds":	[]
 	}, {
 		"id":	16,
-		"name":	"papulandia/8",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[14, 15, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]
-	}, {
-		"id":	17,
-		"name":	"wawdogih",
-		"coordinatorId":	2,
-		"userIds":	[2, 11],
-		"messageIds":	[28, 31]
-	}, {
-		"id":	18,
-		"name":	"CuartoDelPapu",
+		"name":	"]rr{npv|{Sv{ny",
 		"coordinatorId":	11,
 		"userIds":	[11],
-		"messageIds":	[32]
-	}, {
-		"id":	19,
-		"name":	"lol",
-		"coordinatorId":	15,
-		"userIds":	[15],
-		"messageIds":	[],
-		"requestIds":	[2]
-	}, {
-		"id":	6,
-		"name":	"prueban+1",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[3],
+		"messageIds":	[44, 45, 46, 47, 49, 50],
 		"requestIds":	[]
 	}, {
-		"id":	6,
-		"name":	"prueban+1",
-		"coordinatorId":	2,
-		"userIds":	[2],
-		"messageIds":	[3],
-		"requestIds":	[]
-	}, {
-		"id":	19,
-		"name":	"lol",
-		"coordinatorId":	15,
-		"userIds":	[15],
-		"messageIds":	[],
-		"requestIds":	[]
-	}, {
-		"id":	19,
-		"name":	"lol",
-		"coordinatorId":	15,
-		"userIds":	[15],
-		"messageIds":	[],
-		"requestIds":	[]
-	}, {
-		"id":	20,
-		"name":	"heidiChat",
-		"coordinatorId":	16,
-		"userIds":	[16],
-		"messageIds":	[],
-		"requestIds":	[2]
-	}, {
-		"id":	21,
-		"name":	"heidiChat2",
-		"coordinatorId":	16,
-		"userIds":	[16, 17, 18, 2],
-		"messageIds":	[48, 49, 50, 51, 52, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 111, 112, 113, 114, 115, 117, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171],
-		"requestIds":	[]
-	}, {
-		"id":	22,
-		"name":	"Jaime Chat",
-		"coordinatorId":	17,
-		"userIds":	[17, 16],
-		"messageIds":	[53, 54, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 116],
-		"requestIds":	[]
-	}, {
-		"id":	23,
-		"name":	"trsForaneos",
-		"coordinatorId":	18,
-		"userIds":	[18, 17, 16],
-		"messageIds":	[118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134],
-		"requestIds":	[]
-	}, {
-		"id":	24,
-		"name":	"faltantes",
-		"coordinatorId":	18,
-		"userIds":	[18],
-		"messageIds":	[135, 136, 137, 138, 139, 140, 141, 142],
-		"requestIds":	[2]
-	}, {
-		"id":	25,
-		"name":	"Esposos",
-		"coordinatorId":	2,
-		"userIds":	[2, 19],
-		"messageIds":	[172, 173],
+		"id":	17,
+		"name":	"Wnvzr`|y|",
+		"coordinatorId":	11,
+		"userIds":	[11],
+		"messageIds":	[48],
 		"requestIds":	[]
 	}]

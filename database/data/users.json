@@ -1,106 +1,57 @@
 [{
-		"id":	1,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[1]
-	}, {
-		"id":	2,
-		"name":	"soto",
-		"username":	"soto",
-		"nickname":	"soto",
-		"password":	"soto",
-		"chatRoomsIds":	[3, 4, 5, 6, 16, 17, 21, 25]
-	}, {
-		"id":	3,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[7]
-	}, {
 		"id":	4,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[8]
+		"name":	"br{nzr",
+		"username":	"br{nzr",
+		"nickname":	"Qv}yn",
+		"password":	">?@ABC",
+		"chatRoomsIds":	[2, 5, 6, 9]
 	}, {
 		"id":	5,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[9]
+		"name":	"Wnvzr",
+		"username":	"Wnvzr",
+		"nickname":	"Wnzr",
+		"password":	">?>?>?",
+		"chatRoomsIds":	[4, 11, 12]
 	}, {
 		"id":	6,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[10]
+		"name":	"nyn|",
+		"username":	"nyn|",
+		"nickname":	"Zv{vpo|",
+		"password":	"zv{v>?@",
+		"chatRoomsIds":	[3, 7, 11, 12, 14]
 	}, {
 		"id":	7,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[11]
+		"name":	"]ry|{]vz}|{",
+		"username":	"]ry|{]vz}|{",
+		"nickname":	"\\zn",
+		"password":	"=?=C?=?C",
+		"chatRoomsIds":	[8, 2, 14]
 	}, {
 		"id":	8,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[12]
+		"name":	"Pny|Wg",
+		"username":	"Pny|Wg",
+		"nickname":	"PWg",
+		"password":	">?@ABC",
+		"chatRoomsIds":	[6, 9, 10, 2]
 	}, {
 		"id":	9,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[13]
+		"name":	"UrvqvZZ",
+		"username":	"UrvqvZZ",
+		"nickname":	"Urvqv",
+		"password":	">?@ABC",
+		"chatRoomsIds":	[10, 13, 14]
 	}, {
 		"id":	10,
-		"name":	"juan",
-		"password":	"1234",
-		"chatRoomsIds":	[14]
+		"name":	"Jai",
+		"username":	"Jai",
+		"nickname":	"Ja",
+		"password":	"121212",
+		"chatRoomsIds":	[]
 	}, {
 		"id":	11,
-		"name":	"papu",
-		"password":	"papu2",
-		"chatRoomsIds":	[18, 17]
-	}, {
-		"id":	12,
-		"name":	"papu",
-		"password":	"papupapu",
+		"name":	"Wnvzr_",
+		"username":	"Wnvzr_",
+		"nickname":	"Wnvzv|",
+		"password":	">?@ABC",
 		"chatRoomsIds":	[]
-	}, {
-		"id":	13,
-		"name":	"PruebanuevoUsuario",
-		"password":	"pruebaprueba",
-		"chatRoomsIds":	[]
-	}, {
-		"id":	14,
-		"name":	"eddy",
-		"password":	"123123",
-		"chatRoomsIds":	[3]
-	}, {
-		"id":	15,
-		"name":	"vale",
-		"password":	"123456",
-		"chatRoomsIds":	[19]
-	}, {
-		"id":	16,
-		"name":	"Heidi Meiners",
-		"username":	"Heidi Meiners",
-		"nickname":	"Heidi",
-		"password":	"heidi2005",
-		"chatRoomsIds":	[20, 21, 22, 23]
-	}, {
-		"id":	17,
-		"name":	"Jaime",
-		"username":	"Jaime",
-		"nickname":	"James",
-		"password":	"121212",
-		"chatRoomsIds":	[21, 22, 23]
-	}, {
-		"id":	18,
-		"name":	"valeria",
-		"username":	"valeria",
-		"nickname":	"valemas",
-		"password":	"123456",
-		"chatRoomsIds":	[21, 23, 24]
-	}, {
-		"id":	19,
-		"name":	"Mafer",
-		"username":	"Mafer",
-		"nickname":	"Querida",
-		"password":	"123456",
-		"chatRoomsIds":	[25]
 	}]
